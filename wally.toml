@@ -1,0 +1,12 @@
+[package]
+name = "kr3ative/karet"
+version = "0.1.0"
+description = "An in-game command framework and terminal for Roblox"
+license = "MIT"
+authors = ["kr3ative"]
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+[dependencies]
+# Switch    = "scope/switch@x.y.z"     # input detection — set real scope/version
+# Substance = "scope/substance@x.y.z"  # networking — set real scope/version

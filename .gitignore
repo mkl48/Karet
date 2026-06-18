@@ -1,0 +1,19 @@
+# Wally — installed packages
+/Packages/
+/ServerPackages/
+/DevPackages/
+wally.lock
+
+# Roblox / Rojo build artifacts
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.rbxlx.lock
+*.rbxm
+*.rbxmx
+sourcemap.json
+
+# Editor / OS
+.DS_Store
+.vscode/
+*.log
