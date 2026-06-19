@@ -1,12 +1,240 @@
---!strict
 -- Karet — an in-game command framework and terminal for Roblox.
 --
--- Karet is the product and the terminal emulator (the ScreenGui CLI surface).
--- Kash is the shell/command grammar that runs inside it.
+-- Karet is the product, the terminal emulator (the ScreenGui CLI surface), and the
+-- shell/command grammar that runs inside it. Kaveat is the built-in Luau editor.
 -- Built on Switch (input) and Substance (networking).
+--
+-- One entry point on both realms: require(ReplicatedStorage.Karet). Behaviour diverges
+-- by RunService internally — Start() boots the client terminal or the server listener.
+
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+
+local Shell = require(script.Shell)
+local Theme = require(script.Theme)
+local Terminal = require(script.Terminal)
+local Registry = require(script.Registry)
+local Types = require(script.Types)
+local Host = require(script.Host)
+local Networking = require(script.Networking)
 
 local Karet = {}
 
 Karet.Version = "0.1.0"
+
+-- ---------------------------------------------------------------------------
+-- shared framework state (one registry + type system across both realms)
+-- ---------------------------------------------------------------------------
+
+local registry = Registry.new()
+local types = Types.new()
+local hooks = { pre = {}, post = {}, onErr = {}, onConnect = {} }
+local auth = { allowed = {} :: { [number]: boolean }, denied = {} :: { [number]: boolean }, defaultRole = "User" }
+
+-- ---------------------------------------------------------------------------
+-- shell surface
+-- ---------------------------------------------------------------------------
+
+-- The shell lives under Karet directly (no separate sub-brand). Power users can reach
+-- the pieces via Karet.Shell; the common entry points are re-exported flat.
+Karet.Shell = Shell
+Karet.Tokenize = Shell.Tokenize
+Karet.Parse = Shell.Parse
+Karet.Analyze = Shell.Analyze
+
+-- One semantic colorscheme piped through every Karet surface (terminal, editor, pickers).
+-- Set with Karet.Theme.Set("gruvbox") or pass a built-in to Start{ Theme = ... }.
+Karet.Theme = Theme
+
+-- The terminal surface (class). Karet.Start builds and mounts one on the client.
+Karet.Terminal = Terminal
+
+-- Config the server stashes (rate limiting etc. land in a later layer).
+Karet.Config = {}
+
+-- ---------------------------------------------------------------------------
+-- command + type registration
+-- ---------------------------------------------------------------------------
+
+-- Register a command from a table definition (DESIGN → Command definition).
+function Karet.Register(def: any)
+	return registry:register(def)
+end
+
+-- Start the fluent builder: Karet.Command("ban"):Alias("b"):...:Register().
+function Karet.Command(name: string)
+	return registry:command(name)
+end
+
+-- Register a custom argument type (à la Cmdr/Conch).
+function Karet.DefineType(name: string, def: any)
+	types:Define(name, def)
+end
+
+-- ---------------------------------------------------------------------------
+-- auth & roles (server-authoritative)
+-- ---------------------------------------------------------------------------
+
+function Karet.SetRoleHook(fn: (player: any) -> string)
+	auth.roleHook = fn
+end
+
+function Karet.SetAuthHook(fn: (player: any, command: string) -> boolean?)
+	auth.authHook = fn
+end
+
+function Karet.SetGroupHook(fn: (player: any) -> number)
+	auth.groupHook = fn
+end
+
+function Karet.AllowPlayer(userId: number)
+	auth.allowed[userId] = true
+end
+
+function Karet.DenyPlayer(userId: number)
+	auth.denied[userId] = true
+end
+
+function Karet.SetDefaultRole(role: string)
+	auth.defaultRole = role
+end
+
+-- Define the role -> rank ordering used for Permission comparisons.
+function Karet.SetRoles(ranks: { [string]: number })
+	auth.roleRanks = ranks
+end
+
+-- ---------------------------------------------------------------------------
+-- middleware
+-- ---------------------------------------------------------------------------
+
+function Karet.PreExecute(fn: (ctx: any) -> any?)
+	table.insert(hooks.pre, fn)
+end
+
+function Karet.PostExecute(fn: (ctx: any, result: any) -> ())
+	table.insert(hooks.post, fn)
+end
+
+function Karet.OnErr(fn: (ctx: any, err: any) -> ())
+	table.insert(hooks.onErr, fn)
+end
+
+function Karet.OnConnect(fn: (player: any) -> ())
+	table.insert(hooks.onConnect, fn)
+end
+
+-- ---------------------------------------------------------------------------
+-- boot
+-- ---------------------------------------------------------------------------
+
+local function buildAuth()
+	return {
+		roleHook = auth.roleHook,
+		authHook = auth.authHook,
+		groupHook = auth.groupHook,
+		allowed = auth.allowed,
+		denied = auth.denied,
+		roleRanks = auth.roleRanks,
+		defaultRole = auth.defaultRole,
+	}
+end
+
+local function startClient(options: { [string]: any })
+	if options.Theme ~= nil then
+		Karet.Theme.Set(options.Theme)
+	end
+
+	local terminal = Terminal.new()
+	terminal:mount()
+	if options.Toggle then
+		terminal:enableSwitch(options.Toggle)
+	end
+
+	local networking = Networking.new()
+	local host = Host.new({
+		registry = registry,
+		types = types,
+		isClient = true,
+		player = Players.LocalPlayer,
+		sink = function(group, message)
+			terminal:print(message, group)
+		end,
+		hooks = hooks,
+		auth = buildAuth(),
+		networking = networking,
+	})
+	local evaluator = Shell.newEvaluator(host)
+
+	terminal:onSubmit(function(line: string)
+		local parsed = Karet.Parse(line)
+		if #parsed.diagnostics > 0 then
+			for _, d in parsed.diagnostics do
+				terminal:error(d.message)
+			end
+			return
+		end
+		host.session.rawInput = line
+		local ok, result = pcall(function()
+			return evaluator:run(parsed.ast)
+		end)
+		if not ok then
+			terminal:error(tostring(result))
+		elseif type(result) == "table" and result.ok == false and result.error then
+			terminal:error(result.error)
+		end
+	end)
+
+	Karet.Active = terminal
+	Karet.Host = host
+	Karet.Evaluator = evaluator
+	return terminal
+end
+
+local function startServer(options: { [string]: any })
+	if options.DefaultRole then
+		auth.defaultRole = options.DefaultRole
+	end
+	Karet.Config.DefaultRole = auth.defaultRole
+	Karet.Config.RateLimit = options.RateLimit
+
+	local networking = Networking.new()
+	local host = Host.new({
+		registry = registry,
+		types = types,
+		isServer = true,
+		hooks = hooks,
+		auth = buildAuth(),
+		networking = networking,
+	})
+	networking:listen(function(request, player)
+		return host.runServerRequest(request, player)
+	end)
+
+	-- OnConnect middleware
+	Players.PlayerAdded:Connect(function(player)
+		for _, fn in hooks.onConnect do
+			task.spawn(fn, player)
+		end
+	end)
+	for _, player in Players:GetPlayers() do
+		for _, fn in hooks.onConnect do
+			task.spawn(fn, player)
+		end
+	end
+
+	Karet.Host = host
+	return nil
+end
+
+-- Boot Karet. Client → build+wire the terminal and the command evaluator; server → stand
+-- up the networking listener + auth pipeline. One `Karet.Start(...)` works in both realms.
+function Karet.Start(opts: { [string]: any }?)
+	local options = opts or {}
+	if RunService:IsClient() then
+		return startClient(options)
+	end
+	return startServer(options)
+end
 
 return Karet
