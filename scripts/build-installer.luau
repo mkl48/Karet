@@ -13,6 +13,9 @@ local fs = require("@lune/fs")
 local SRC = "src"
 local OUT_DIR = "dist"
 local OUT = OUT_DIR .. "/install.luau"
+local BOOT = OUT_DIR .. "/bootstrap.luau"
+-- Raw URL the bootstrap fetches the full installer from. Adjust the branch if needed.
+local RAW_URL = "https://raw.githubusercontent.com/mkl48/Karet/master/dist/install.luau"
 
 local body: { string } = {}
 local function emit(line: string)
@@ -147,9 +150,49 @@ if old then
 end
 ]]
 
-local footer = `\nprint("[Karet] installed {moduleCount} modules under ReplicatedStorage.Karet")\n`
+-- `return true` lets the bootstrap's require-fallback run the installer as a ModuleScript.
+local footer = `\nprint("[Karet] installed {moduleCount} modules under ReplicatedStorage.Karet")\nreturn true\n`
 
 pcall(fs.writeDir, OUT_DIR)
 fs.writeFile(OUT, header .. "\n" .. table.concat(body, "\n") .. "\n" .. footer)
 
-print(`Wrote {OUT} - {moduleCount} modules, {folderCount} folder(s).`)
+-- The tiny bootstrap: paste THIS into the command bar instead of the 800K+ installer. It
+-- HTTP-fetches the installer and runs it (loadstring if available, else a temp ModuleScript
+-- require). Needs Game Settings -> Security -> Allow HTTP Requests = ON.
+local bootstrap = [[
+-- Karet bootstrap - paste into the Roblox Studio command bar.
+-- Fetches and runs the full installer over HTTP (no giant paste).
+-- Requires: Game Settings -> Security -> Allow HTTP Requests = ON.
+local HttpService = game:GetService("HttpService")
+local URL = "]] .. RAW_URL .. [["
+
+local ok, body = pcall(function()
+	return HttpService:GetAsync(URL)
+end)
+if not ok then
+	warn("[Karet] HTTP fetch failed (enable Allow HTTP Requests in Game Settings): " .. tostring(body))
+	return
+end
+
+if loadstring then
+	local fn, err = loadstring(body)
+	if fn then
+		fn()
+		return
+	end
+	warn("[Karet] loadstring failed, trying ModuleScript fallback: " .. tostring(err))
+end
+
+local m = Instance.new("ModuleScript")
+m.Name = "KaretInstaller"
+m.Source = body
+m.Parent = game:GetService("ReplicatedStorage")
+local okr, err = pcall(require, m)
+m:Destroy()
+if not okr then
+	warn("[Karet] install failed: " .. tostring(err))
+end
+]]
+fs.writeFile(BOOT, bootstrap)
+
+print(`Wrote {OUT} ({moduleCount} modules) and {BOOT}.`)

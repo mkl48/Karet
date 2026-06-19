@@ -64,11 +64,21 @@ Karet = "kr3ative/karet@0.1.0"
 wally install
 ```
 
-### Command-bar installer (no toolchain)
+### Command-bar install (no toolchain)
 
-Paste [`dist/install.luau`](dist/install.luau) into the Roblox Studio command bar - it
-recreates the whole `Karet` module tree (deps included) under `ReplicatedStorage`. Nothing
-else to set up.
+The installer bundles every module (Karet + Switch + Substance + Iris), so it's large.
+**Bootstrap (recommended)** - paste this one snippet into the Studio command bar; it fetches
+and runs the installer over HTTP (enable *Game Settings → Security → Allow HTTP Requests*):
+
+```lua
+local h = game:GetService("HttpService")
+loadstring(h:GetAsync("https://raw.githubusercontent.com/mkl48/Karet/master/dist/install.luau"))()
+```
+
+([`dist/bootstrap.luau`](dist/bootstrap.luau) is the same with error handling + a
+no-`loadstring` fallback.) Or, offline, paste the whole ~880K
+[`dist/install.luau`](dist/install.luau) directly. Either way it recreates the whole `Karet`
+tree (deps included) under `ReplicatedStorage`.
 
 Regenerate it from source any time with:
 
