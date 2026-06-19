@@ -32,6 +32,30 @@ export type Control = {
 	abortMessage: () -> string?,
 }
 
+-- The handler-facing ctx surface (typed so editors autocomplete ctx.* in your handlers).
+export type Context = {
+	Player: Player?,
+	Command: string,
+	RawInput: string?,
+	Args: { [string]: any },
+	Attributes: { [string]: boolean },
+	IsServer: boolean,
+	IsClient: boolean,
+	ExecutedAt: number,
+	Role: string?,
+	Rank: number?,
+	Cache: any, -- Karet.Cache
+	Query: any, -- Karet.Query
+	Print: (message: any) -> (),
+	Warn: (message: any) -> (),
+	Err: (message: any) -> (),
+	Info: (message: any) -> (),
+	Reply: (message: any) -> (),
+	Return: (...any) -> (),
+	Commit: (payload: any) -> (),
+	Abort: (message: string?) -> (),
+}
+
 function Context.isAbort(err: any): boolean
 	return type(err) == "table" and err[ABORT] == true
 end

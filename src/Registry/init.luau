@@ -11,6 +11,9 @@
 local Registry = {}
 Registry.__index = Registry
 
+export type NetworkKind = "Shared" | "Client" | "Server" | "Context"
+export type Handler = (ctx: any, payload: any?) -> ()
+
 export type Arg = { Name: string, Types: { string }, Required: boolean?, Default: any? }
 export type Attribute = { Name: string, Short: string?, Description: string? }
 export type Return = { Name: string, Type: string }
@@ -19,12 +22,25 @@ export type Definition = {
 	Name: string,
 	Aliases: { string }?,
 	Description: string?,
-	Network: string?, -- Shared | Client | Server | Context
+	Network: NetworkKind?,
 	Permission: string?,
 	Args: { Arg }?,
 	Attributes: { Attribute }?,
 	Returns: { Return }?,
-	On: { Client: ((...any) -> ())?, Server: ((...any) -> ())?, Shared: ((...any) -> ())? }?,
+	On: { Client: Handler?, Server: Handler?, Shared: Handler? }?,
+}
+
+-- The fluent builder surface (so editors autocomplete the chain).
+export type Builder = {
+	Alias: (self: Builder, ...string) -> Builder,
+	Description: (self: Builder, text: string) -> Builder,
+	Network: (self: Builder, kind: NetworkKind) -> Builder,
+	Permission: (self: Builder, role: string) -> Builder,
+	Arg: (self: Builder, arg: Arg) -> Builder,
+	Attribute: (self: Builder, attr: Attribute) -> Builder,
+	Return: (self: Builder, ret: Return) -> Builder,
+	On: (self: Builder, realm: NetworkKind, handler: Handler) -> Builder,
+	Register: (self: Builder) -> Definition,
 }
 
 local VALID_NETWORK = { Shared = true, Client = true, Server = true, Context = true }
@@ -91,11 +107,11 @@ end
 local Builder = {}
 Builder.__index = Builder
 
-function Registry:command(name: string)
+function Registry:command(name: string): Builder
 	return setmetatable({
 		registry = self,
 		def = { Name = name, Aliases = {}, Args = {}, Attributes = {}, Returns = {}, On = {} } :: Definition,
-	}, Builder)
+	}, Builder) :: any
 end
 
 function Builder:Alias(...: string)

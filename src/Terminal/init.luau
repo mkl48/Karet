@@ -26,6 +26,26 @@ local Input = require(script.Input)
 local Terminal = {}
 Terminal.__index = Terminal
 
+-- Public terminal surface (typed so `local t = Karet.Start(...)` autocompletes t:open() etc.)
+export type Terminal = {
+	isOpen: boolean,
+	compact: boolean,
+	gui: Instance,
+	open: (self: Terminal) -> (),
+	close: (self: Terminal) -> (),
+	toggle: (self: Terminal) -> (),
+	mount: (self: Terminal, target: Instance?) -> Terminal,
+	enableSwitch: (self: Terminal, toggle: string | { Key: string, Modifier: string? }) -> (),
+	print: (self: Terminal, text: string, group: string?) -> (),
+	error: (self: Terminal, text: string) -> (),
+	warn: (self: Terminal, text: string) -> (),
+	info: (self: Terminal, text: string) -> (),
+	success: (self: Terminal, text: string) -> (),
+	clear: (self: Terminal) -> (),
+	onSubmit: (self: Terminal, fn: (string) -> ()) -> (),
+	destroy: (self: Terminal) -> (),
+}
+
 local OPEN_CONTEXT = "KaretTerminal"
 
 -- Full-window geometry per placement mode. Custom Size/Position in opts override these.

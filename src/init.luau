@@ -21,6 +21,40 @@ local Commands = require(script.Commands)
 local Kaveat = require(script.Kaveat)
 local Cache = require(script.Cache)
 local Query = require(script.Query)
+local ContextMod = require(script.Context)
+
+-- ---------------------------------------------------------------------------
+-- public types (exported so editors autocomplete config + params)
+-- ---------------------------------------------------------------------------
+
+export type ThemePalette = Theme.Palette
+export type ThemeGroup = Theme.Group
+export type Argument = Registry.Arg
+export type Attribute = Registry.Attribute
+export type ReturnSpec = Registry.Return
+export type NetworkKind = Registry.NetworkKind
+export type Handler = Registry.Handler
+export type CommandDefinition = Registry.Definition
+export type CommandBuilder = Registry.Builder
+export type Context = ContextMod.Context
+export type TypeDefinition = Types.Definition
+export type RateLimit = { MaxCalls: number, Window: number }
+export type ToggleSpec = string | { Key: string, Modifier: string? }
+
+export type StartConfig = {
+	Toggle: ToggleSpec?, -- key / shortcut to open the terminal, e.g. "Semicolon" or "LeftControl+Semicolon"
+	Theme: (string | ThemePalette)?, -- a built-in theme name or a palette
+	Placement: ("Window" | "Top" | "Bottom" | "Middle")?, -- where the window/bar sits
+	Compact: boolean?, -- single-line command bar instead of the full window
+	Draggable: boolean?, -- drag the Window-placement terminal by its title bar
+	Parent: Instance?, -- where to mount (defaults to PlayerGui)
+	Size: UDim2?, -- override the window size
+	Position: UDim2?, -- override the window position
+	Kaveat: boolean?, -- enable the Kaveat editor
+	BuiltIns: boolean?, -- register built-in commands (default true)
+	DefaultRole: string?, -- server: default role for players
+	RateLimit: RateLimit?, -- server: rate limiting (reserved)
+}
 
 local Karet = {}
 
@@ -76,17 +110,17 @@ Karet.Config = {}
 -- ---------------------------------------------------------------------------
 
 -- Register a command from a table definition (DESIGN → Command definition).
-function Karet.Register(def: any)
+function Karet.Register(def: CommandDefinition): CommandDefinition
 	return registry:register(def)
 end
 
 -- Start the fluent builder: Karet.Command("ban"):Alias("b"):...:Register().
-function Karet.Command(name: string)
+function Karet.Command(name: string): CommandBuilder
 	return registry:command(name)
 end
 
 -- Register a custom argument type (à la Cmdr/Conch).
-function Karet.DefineType(name: string, def: any)
+function Karet.DefineType(name: string, def: TypeDefinition)
 	types:Define(name, def)
 end
 
@@ -103,15 +137,15 @@ end
 -- auth & roles (server-authoritative)
 -- ---------------------------------------------------------------------------
 
-function Karet.SetRoleHook(fn: (player: any) -> string)
+function Karet.SetRoleHook(fn: (player: Player) -> string)
 	auth.roleHook = fn
 end
 
-function Karet.SetAuthHook(fn: (player: any, command: string) -> boolean?)
+function Karet.SetAuthHook(fn: (player: Player, command: string) -> boolean?)
 	auth.authHook = fn
 end
 
-function Karet.SetGroupHook(fn: (player: any) -> number)
+function Karet.SetGroupHook(fn: (player: Player) -> number)
 	auth.groupHook = fn
 end
 
@@ -136,19 +170,19 @@ end
 -- middleware
 -- ---------------------------------------------------------------------------
 
-function Karet.PreExecute(fn: (ctx: any) -> any?)
+function Karet.PreExecute(fn: (ctx: Context) -> any?)
 	table.insert(hooks.pre, fn)
 end
 
-function Karet.PostExecute(fn: (ctx: any, result: any) -> ())
+function Karet.PostExecute(fn: (ctx: Context, result: any) -> ())
 	table.insert(hooks.post, fn)
 end
 
-function Karet.OnErr(fn: (ctx: any, err: any) -> ())
+function Karet.OnErr(fn: (ctx: Context, err: any) -> ())
 	table.insert(hooks.onErr, fn)
 end
 
-function Karet.OnConnect(fn: (player: any) -> ())
+function Karet.OnConnect(fn: (player: Player) -> ())
 	table.insert(hooks.onConnect, fn)
 end
 
@@ -168,12 +202,12 @@ local function buildAuth()
 	}
 end
 
-local function startClient(options: { [string]: any })
+local function startClient(options: StartConfig)
 	if options.Theme ~= nil then
 		Karet.Theme.Set(options.Theme)
 	end
 
-	local terminal = Terminal.new(options)
+	local terminal = Terminal.new(options :: any)
 	terminal:mount()
 	if options.Toggle then
 		terminal:enableSwitch(options.Toggle)
@@ -257,7 +291,7 @@ local function startClient(options: { [string]: any })
 	return terminal
 end
 
-local function startServer(options: { [string]: any })
+local function startServer(options: StartConfig)
 	if options.DefaultRole then
 		auth.defaultRole = options.DefaultRole
 	end
@@ -297,8 +331,8 @@ end
 
 -- Boot Karet. Client → build+wire the terminal and the command evaluator; server → stand
 -- up the networking listener + auth pipeline. One `Karet.Start(...)` works in both realms.
-function Karet.Start(opts: { [string]: any }?)
-	local options = opts or {}
+function Karet.Start(opts: StartConfig?): Terminal.Terminal?
+	local options: StartConfig = opts or {}
 	if RunService:IsClient() then
 		return startClient(options)
 	end
