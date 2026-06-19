@@ -50,6 +50,8 @@ local Registry = require(script.Registry)
 local Types = require(script.Types)
 local Host = require(script.Host)
 local Networking = require(script.Networking)
+local Commands = require(script.Commands)
+local Kaveat = require(script.Kaveat)
 
 local Karet = {}
 
@@ -82,6 +84,9 @@ Karet.Theme = Theme
 -- The terminal surface (class). Karet.Start builds and mounts one on the client.
 Karet.Terminal = Terminal
 
+-- Kaveat, the built-in Luau editor (scaffold). Enable with Start{ Kaveat = true }.
+Karet.Kaveat = Kaveat
+
 -- Config the server stashes (rate limiting etc. land in a later layer).
 Karet.Config = {}
 
@@ -102,6 +107,15 @@ end
 -- Register a custom argument type (à la Cmdr/Conch).
 function Karet.DefineType(name: string, def: any)
 	types:Define(name, def)
+end
+
+-- Names of all registered commands, and a single command's definition.
+function Karet.List(): { string }
+	return registry:list()
+end
+
+function Karet.Get(name: string): any?
+	return registry:get(name)
 end
 
 -- ---------------------------------------------------------------------------
@@ -178,10 +192,39 @@ local function startClient(options: { [string]: any })
 		Karet.Theme.Set(options.Theme)
 	end
 
-	local terminal = Terminal.new()
+	local terminal = Terminal.new(options)
 	terminal:mount()
 	if options.Toggle then
 		terminal:enableSwitch(options.Toggle)
+	end
+
+	-- Built-in commands (help/clear/echo/theme/...), unless opted out.
+	if options.BuiltIns ~= false then
+		local services = {
+			clear = function()
+				terminal:clear()
+			end,
+			setTheme = function(name)
+				Karet.Theme.Set(name)
+			end,
+			listThemes = function()
+				return Karet.Theme.List()
+			end,
+			list = function()
+				return registry:list()
+			end,
+			get = function(name)
+				return registry:get(name)
+			end,
+			playerName = function()
+				local p = Players.LocalPlayer
+				return p and p.Name or "client"
+			end,
+			version = Karet.Version,
+		}
+		for _, def in Commands.build(services) do
+			registry:register(def)
+		end
 	end
 
 	local networking = Networking.new()
@@ -217,6 +260,13 @@ local function startClient(options: { [string]: any })
 			terminal:error(result.error)
 		end
 	end)
+
+	-- Kaveat editor (scaffold), mounted beside the terminal if enabled.
+	if options.Kaveat then
+		local editor = Kaveat.new({ Parent = terminal.gui.Parent })
+		editor:mount(terminal.gui.Parent)
+		Karet.Editor = editor
+	end
 
 	Karet.Active = terminal
 	Karet.Host = host
@@ -272,7 +322,165 @@ end
 
 return Karet
 ]])
-local _2 = mod("Context", _1, [[
+local _2 = mod("Commands", _1, [[
+-- Karet's built-in commands. Returns command definitions parameterised by a small
+-- `services` table, so the commands stay decoupled from the umbrella (and are testable
+-- headlessly by passing stubs). Karet.Start registers these unless BuiltIns = false.
+--
+-- services = {
+--   clear()            -> clear the terminal output
+--   setTheme(name)     -> switch the active theme
+--   listThemes()       -> { string } of theme names
+--   list()             -> { string } of registered command names
+--   get(name)          -> definition? for a command
+--   playerName()       -> the local player's name (or "server")
+--   version            -> Karet.Version string
+-- }
+
+local Commands = {}
+
+export type Services = {
+	clear: () -> (),
+	setTheme: (name: string) -> (),
+	listThemes: () -> { string },
+	list: () -> { string },
+	get: (name: string) -> any?,
+	playerName: () -> string,
+	version: string,
+}
+
+-- Build the list of built-in command definitions.
+function Commands.build(services: Services): { any }
+	return {
+		{
+			Name = "help",
+			Aliases = { "h", "?" },
+			Description = "list commands, or show one command's details",
+			Network = "Client",
+			Args = { { Name = "command", Types = { "String" }, Required = false } },
+			On = {
+				Client = function(ctx)
+					local which = ctx.Args.command
+					if which then
+						local def = services.get(which)
+						if not def then
+							return ctx.Err(`no command '{which}'`)
+						end
+						ctx.Print(`{def.Name}{def.Description and " - " .. def.Description or ""}`)
+						for _, arg in def.Args or {} do
+							local opt = arg.Required and "" or "?"
+							ctx.Info(`  <{arg.Name}{opt}> : {table.concat(arg.Types, " | ")}`)
+						end
+						for _, attr in def.Attributes or {} do
+							ctx.Info(`  -{attr.Short or attr.Name}  {attr.Description or attr.Name}`)
+						end
+					else
+						ctx.Print("commands: " .. table.concat(services.list(), ", "))
+						ctx.Info("type  help <command>  for details")
+					end
+				end,
+			},
+		},
+
+		{
+			Name = "commands",
+			Aliases = { "cmds" },
+			Description = "list every registered command",
+			Network = "Client",
+			On = { Client = function(ctx)
+				ctx.Print(table.concat(services.list(), ", "))
+			end },
+		},
+
+		{
+			Name = "clear",
+			Aliases = { "cls" },
+			Description = "clear the terminal output",
+			Network = "Client",
+			On = { Client = function()
+				services.clear()
+			end },
+		},
+
+		{
+			Name = "echo",
+			Aliases = { "print" },
+			Description = "print text back",
+			Network = "Client",
+			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				ctx.Print(ctx.Args.text)
+			end },
+		},
+
+		{
+			Name = "version",
+			Aliases = { "ver" },
+			Description = "show the Karet version",
+			Network = "Client",
+			On = { Client = function(ctx)
+				ctx.Print(`Karet v{services.version}`)
+			end },
+		},
+
+		{
+			Name = "time",
+			Description = "show the current time",
+			Network = "Client",
+			On = { Client = function(ctx)
+				ctx.Print(os.date("%H:%M:%S"))
+			end },
+		},
+
+		{
+			Name = "me",
+			Aliases = { "whoami" },
+			Description = "show your name",
+			Network = "Client",
+			On = { Client = function(ctx)
+				ctx.Print(services.playerName())
+			end },
+		},
+
+		{
+			Name = "ping",
+			Description = "pong",
+			Network = "Client",
+			On = { Client = function(ctx)
+				ctx.Print("pong")
+				ctx.Return("pong")
+			end },
+		},
+
+		{
+			Name = "theme",
+			Description = "switch the active colour theme",
+			Network = "Client",
+			Args = { { Name = "name", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				local ok, err = pcall(services.setTheme, ctx.Args.name)
+				if ok then
+					ctx.Print(`theme set to {ctx.Args.name}`)
+				else
+					ctx.Err(tostring(err))
+				end
+			end },
+		},
+
+		{
+			Name = "themes",
+			Description = "list the available themes",
+			Network = "Client",
+			On = { Client = function(ctx)
+				ctx.Print(table.concat(services.listThemes(), ", "))
+			end },
+		},
+	}
+end
+
+return Commands
+]])
+local _3 = mod("Context", _1, [[
 -- Builds the `ctx` object passed to every command handler (DESIGN → ctx reference).
 --
 -- Context.new(opts) returns (ctx, control): `ctx` is the handler-facing surface; `control`
@@ -691,7 +899,271 @@ end
 
 return Host
 ]])
-local _3 = mod("Networking", _1, [[
+local _4 = mod("Kaveat", _1, [[
+-- Kaveat - Karet's built-in Luau script editor (the Neovim + neo-tree analogue).
+--
+-- STATUS: scaffold. This stands up the editor *surface* - a themed window with a
+-- line-numbered multi-line code box, a per-buffer Context (Client/Server), and a Run seam -
+-- so the rest can be layered on. Still TODO (large, some with open design questions):
+--   • Luau syntax highlighting + autocomplete against the live DataModel
+--   • a buffer/file tree (the neo-tree side)
+--   • execution: source is compiled on the SERVER via loadstring (the single gatekeeper),
+--     which enforces the buffer's declared Context. Client-context *execution* (the client
+--     can't loadstring) is an open decision in DESIGN - so :setRunner() is a seam the host
+--     wires once that story lands; the default runner just reports it isn't wired yet.
+--
+-- Kaveat reuses the Terminal's create() helper and the shared Theme.
+
+local Theme = require(script.Parent.Theme)
+local create = require(script.Parent.Terminal.create)
+
+local Kaveat = {}
+Kaveat.__index = Kaveat
+
+local FONT = Enum.Font.Code
+local TEXT_SIZE = 15
+
+export type Buffer = {
+	name: string,
+	context: string, -- "Client" | "Server"
+	source: string,
+}
+
+-- opts: { Parent = Instance?, Context = "Client"|"Server"? }
+function Kaveat.new(opts: { [string]: any }?)
+	local self = setmetatable({}, Kaveat)
+	local options = opts or {}
+
+	self.options = options
+	self.isOpen = false
+	self.themed = {} :: { [string]: any }
+	self.runner = nil :: ((source: string, context: string) -> any)?
+	self.buffer = { name = "untitled.luau", context = options.Context or "Client", source = "" } :: Buffer
+
+	local title = create("TextLabel", {
+		Name = "Title",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -120, 1, 0),
+		Position = UDim2.new(0, 10, 0, 0),
+		Font = FONT,
+		TextSize = 13,
+		Text = self.buffer.name,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+	}) :: TextLabel
+
+	local contextLabel = create("TextLabel", {
+		Name = "Context",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(0, 110, 1, 0),
+		Position = UDim2.new(1, -116, 0, 0),
+		Font = FONT,
+		TextSize = 13,
+		Text = self.buffer.context .. "  ·  F5 run",
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextYAlignment = Enum.TextYAlignment.Center,
+	}) :: TextLabel
+
+	local header = create("Frame", {
+		Name = "Header",
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 0, 26),
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			title,
+			contextLabel,
+		},
+	})
+
+	local gutter = create("TextLabel", {
+		Name = "Gutter",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(0, 40, 1, -52),
+		Position = UDim2.new(0, 0, 0, 28),
+		Font = FONT,
+		TextSize = TEXT_SIZE,
+		Text = "1",
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextYAlignment = Enum.TextYAlignment.Top,
+	}) :: TextLabel
+
+	local editor = create("TextBox", {
+		Name = "Editor",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -48, 1, -52),
+		Position = UDim2.new(0, 46, 0, 28),
+		Font = FONT,
+		TextSize = TEXT_SIZE,
+		Text = "",
+		PlaceholderText = "-- Luau here",
+		MultiLine = true,
+		ClearTextOnFocus = false,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = false,
+	}) :: TextBox
+
+	local status = create("TextLabel", {
+		Name = "Status",
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 0, 22),
+		Position = UDim2.new(0, 0, 1, -22),
+		Font = FONT,
+		TextSize = 12,
+		Text = "ready",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Children = { create("UIPadding", { PaddingLeft = UDim.new(0, 8) }) },
+	}) :: TextLabel
+
+	local stroke = create("UIStroke", { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+
+	local window = create("Frame", {
+		Name = "Window",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(720, 460),
+		BorderSizePixel = 0,
+		Visible = false,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			stroke,
+			header,
+			gutter,
+			editor,
+			status,
+		},
+	})
+
+	local gui = create("ScreenGui", {
+		Name = "KaretKaveat",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 11,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		Children = { window },
+	})
+
+	self.gui = gui
+	self.window = window
+	self.editor = editor
+	self.gutter = gutter
+	self.title = title
+	self.contextLabel = contextLabel
+	self.status = status
+
+	self.themed.Background = window
+	self.themed.Surface = { header, status }
+	self.themed.Accent = title
+	self.themed.Muted = { gutter, contextLabel }
+	self.themed.Foreground = editor
+	self.themed.Border = stroke
+
+	-- Keep the line-number gutter in sync, and mirror text into the buffer.
+	editor:GetPropertyChangedSignal("Text"):Connect(function()
+		self.buffer.source = editor.Text
+		self:refreshGutter()
+	end)
+
+	self.unsubscribeTheme = Theme.OnChanged(function(palette)
+		self:applyTheme(palette)
+	end)
+
+	return self
+end
+
+function Kaveat:refreshGutter()
+	local lines = select(2, string.gsub(self.editor.Text, "\n", "\n")) + 1
+	local numbers = table.create(lines)
+	for i = 1, lines do
+		numbers[i] = tostring(i)
+	end
+	self.gutter.Text = table.concat(numbers, "\n")
+end
+
+function Kaveat:applyTheme(palette: { [string]: Color3 })
+	self.window.BackgroundColor3 = palette.Background
+	for _, inst in self.themed.Surface do
+		inst.BackgroundColor3 = palette.Surface
+	end
+	self.title.TextColor3 = palette.Accent
+	for _, inst in self.themed.Muted do
+		inst.TextColor3 = palette.Muted
+	end
+	self.editor.TextColor3 = palette.Foreground
+	self.editor.PlaceholderColor3 = palette.Muted
+	self.status.TextColor3 = palette.Muted
+	self.themed.Border.Color = palette.Border
+end
+
+function Kaveat:mount(target: Instance?)
+	local parent = target or self.options.Parent
+	if parent then
+		self.gui.Parent = parent
+	end
+	return self
+end
+
+-- The buffer's realm. Drives which APIs are allowed once execution + sandboxing land.
+function Kaveat:setContext(context: string)
+	self.buffer.context = context
+	self.contextLabel.Text = context .. "  ·  F5 run"
+end
+
+function Kaveat:setSource(source: string)
+	self.editor.Text = source
+end
+
+function Kaveat:getSource(): string
+	return self.editor.Text
+end
+
+-- Host wires the real executor here: runner(source, context) -> result. Until then the
+-- default below reports that execution isn't wired (server loadstring is the next step).
+function Kaveat:setRunner(runner: (source: string, context: string) -> any)
+	self.runner = runner
+end
+
+function Kaveat:run()
+	if not self.runner then
+		self.status.Text = "execution not wired yet (server loadstring pending)"
+		return
+	end
+	self.status.Text = "running..."
+	local ok, result = pcall(self.runner, self.buffer.source, self.buffer.context)
+	self.status.Text = ok and ("ok: " .. tostring(result)) or ("error: " .. tostring(result))
+end
+
+function Kaveat:open()
+	self.isOpen = true
+	self.window.Visible = true
+	self.editor:CaptureFocus()
+end
+
+function Kaveat:close()
+	self.isOpen = false
+	self.editor:ReleaseFocus()
+	self.window.Visible = false
+end
+
+function Kaveat:toggle()
+	if self.isOpen then
+		self:close()
+	else
+		self:open()
+	end
+end
+
+function Kaveat:destroy()
+	if self.unsubscribeTheme then
+		self.unsubscribeTheme()
+	end
+	self.gui:Destroy()
+end
+
+return Kaveat
+]])
+local _5 = mod("Networking", _1, [[
 -- The client/server transport for Karet commands, over Substance.
 --
 -- Only Server and Context commands cross the boundary; Shared/Client run entirely on the
@@ -801,7 +1273,7 @@ end
 
 return Networking
 ]])
-local _4 = mod("Registry", _1, [[
+local _6 = mod("Registry", _1, [[
 -- The command registry. Holds command definitions, resolves names + aliases
 -- (case-insensitively), and offers the fluent builder (sugar over the table form).
 --
@@ -950,7 +1422,7 @@ end
 
 return Registry
 ]])
-local _5 = mod("Shell", _1, [[
+local _7 = mod("Shell", _1, [[
 -- The Karet shell: the tokenizer + parser + evaluator that turn a line of input into an
 -- executed chain. This is the power-user surface; the umbrella `Karet` re-exports the
 -- common entry points (Karet.Tokenize / Parse / Analyze / ...) flat.
@@ -1000,7 +1472,7 @@ end
 
 return Shell
 ]])
-mod("Ast", _5, [[
+mod("Ast", _7, [[
 -- AST node kinds for the Karet shell. The parser builds plain tables tagged with a
 -- `kind` from Ast.Kind; the evaluator dispatches on it. See GRAMMAR.md §3.
 
@@ -1030,7 +1502,7 @@ Ast.Kind = {
 
 return Ast
 ]])
-mod("Evaluator", _5, [[
+mod("Evaluator", _7, [[
 -- The Karet shell evaluator: walk an AST, run chains/guards, drive the return pool and
 -- session variables, and evaluate expressions/type-guards.
 --
@@ -1448,7 +1920,7 @@ end
 
 return Evaluator
 ]])
-mod("Lexer", _5, [[
+mod("Lexer", _7, [[
 -- The Karet shell lexer: source text -> a flat list of neutral tokens.
 --
 -- Neutral means: no FLAG / DIRECTIVE / SLASH_REF / SLASH_DIV tokens. `-`, `--`, `/`,
@@ -1788,7 +2260,7 @@ end
 
 return Lexer
 ]])
-mod("Parser", _5, [[
+mod("Parser", _7, [[
 -- Recursive-descent parser for the Karet shell. Tokens -> AST + diagnostics.
 --
 -- The parser is where context lives (GRAMMAR.md §1): the same `/` token becomes a
@@ -2355,7 +2827,7 @@ end
 
 return Parser
 ]])
-mod("ReturnPool", _5, [[
+mod("ReturnPool", _7, [[
 -- The return pool (GRAMMAR.md §5). Commands push typed/labelled return records; `/`
 -- references read them back. There is no positional stack — you reference returns by
 -- what they are. Failed links contribute nothing, so the pool only holds real results.
@@ -2466,7 +2938,7 @@ end
 
 return ReturnPool
 ]])
-mod("Token", _5, [[
+mod("Token", _7, [[
 -- Token kinds and the Token shape for the Karet shell lexer.
 --
 -- The lexer is deliberately neutral (see GRAMMAR.md §2): it never decides whether a
@@ -2542,7 +3014,7 @@ export type Token = {
 
 return Token
 ]])
-local _6 = mod("Terminal", _1, [[
+local _8 = mod("Terminal", _1, [[
 -- Karet.Terminal — the visible console surface (the Alacritty analogue).
 --
 -- Composes the window chrome, the scrolling Output log, and the Input row, drives them
@@ -2551,9 +3023,10 @@ local _6 = mod("Terminal", _1, [[
 -- is client-only it is required lazily inside enableSwitch(), never at module load, so the
 -- Karet umbrella that requires this module stays safe to load on the server.
 --
--- Text entry itself is the Input row's TextBox — Switch is not in that path. The toggle
--- key therefore types normally while the terminal is open: the open action lives in a
--- "KaretClosed" context that is swapped out for "KaretTerminal" the moment it opens.
+-- Text entry itself is the Input row's TextBox - Switch is not in that path. The toggle is
+-- a single global action driven off the open state; while open, an OPEN_CONTEXT carries the
+-- Escape-to-close and Up/Down history actions. Placement (Window/Top/Bottom) and the mount
+-- parent are configurable via Terminal.new(opts) / :mount().
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -2568,11 +3041,21 @@ local Terminal = {}
 Terminal.__index = Terminal
 
 local OPEN_CONTEXT = "KaretTerminal"
-local CLOSED_CONTEXT = "KaretClosed"
 
-function Terminal.new()
+-- Window geometry per placement mode. Custom Size/Position in opts override these.
+local PLACEMENTS = {
+	Window = { Anchor = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(640, 340) },
+	Top = { Anchor = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 8), Size = UDim2.new(1, -16, 0, 320) },
+	Bottom = { Anchor = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(1, -16, 0, 320) },
+}
+
+-- opts: { Placement = "Window"|"Top"|"Bottom", Parent = Instance?, Size = UDim2?, Position = UDim2? }
+function Terminal.new(opts: { [string]: any }?)
 	local self = setmetatable({}, Terminal)
+	local options = opts or {}
 
+	self.options = options
+	self.placement = PLACEMENTS[options.Placement or "Window"] or PLACEMENTS.Window
 	self.isOpen = false
 	self.switch = nil :: any -- the Switch module, once enableSwitch resolves it
 	self.actions = {} :: { string } -- Switch action names, for teardown
@@ -2626,9 +3109,9 @@ function Terminal.new()
 
 	local window = create("Frame", {
 		Name = "Window",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(640, 340),
+		AnchorPoint = self.placement.Anchor,
+		Position = options.Position or self.placement.Position,
+		Size = options.Size or self.placement.Size,
 		BorderSizePixel = 0,
 		Visible = false,
 		Children = {
@@ -2677,9 +3160,10 @@ function Terminal.new()
 	return self
 end
 
--- Parent the ScreenGui. On the client, defaults to the local player's PlayerGui.
+-- Parent the ScreenGui. Uses the target arg, else opts.Parent, else (on the client) the
+-- local player's PlayerGui. A custom Parent can be any GuiBase2d/ScreenGui/CoreGui surface.
 function Terminal:mount(target: Instance?)
-	local parent = target
+	local parent = target or self.options.Parent
 	if not parent and RunService:IsClient() then
 		local player = Players.LocalPlayer
 		parent = player and player:FindFirstChildOfClass("PlayerGui")
@@ -2687,7 +3171,7 @@ function Terminal:mount(target: Instance?)
 	if parent then
 		self.gui.Parent = parent
 	else
-		warn("Karet.Terminal:mount — no parent given and no PlayerGui found")
+		warn("Karet.Terminal:mount - no parent given and no PlayerGui found")
 	end
 	return self
 end
@@ -2718,7 +3202,6 @@ function Terminal:open()
 	self.isOpen = true
 	self.window.Visible = true
 	if self.switch then
-		self.switch.PopContext(CLOSED_CONTEXT)
 		self.switch.PushContext(OPEN_CONTEXT)
 	end
 	self.input:focus()
@@ -2733,7 +3216,6 @@ function Terminal:close()
 	self.window.Visible = false
 	if self.switch then
 		self.switch.PopContext(OPEN_CONTEXT)
-		self.switch.PushContext(CLOSED_CONTEXT)
 	end
 end
 
@@ -2745,12 +3227,17 @@ function Terminal:toggle()
 	end
 end
 
--- Wire the open/close/history actions through Switch. toggleKey is a KeyCode name string
+-- Wire the toggle/close/history actions through Switch. toggleKey is a KeyCode name string
 -- (e.g. "Semicolon"). Client-only; degrades to a no-op with a warning if Switch is
 -- unavailable, so the terminal still works programmatically and via mouse focus.
+--
+-- The toggle is a single global action driven off self.isOpen (so it never desyncs from a
+-- programmatic open/close). Note: a global toggle key cannot also be *typed* into a command
+-- while the terminal is open - pick a key you wouldn't type (the default ; is fine). Escape
+-- closes; Up/Down browse history (only while open, via the OPEN_CONTEXT).
 function Terminal:enableSwitch(toggleKey: string)
 	if not RunService:IsClient() then
-		warn("Karet.Terminal:enableSwitch — Switch is client-only; ignoring on the server")
+		warn("Karet.Terminal:enableSwitch - Switch is client-only; ignoring on the server")
 		return
 	end
 	local Switch = deps.Switch()
@@ -2759,13 +3246,12 @@ function Terminal:enableSwitch(toggleKey: string)
 	end
 	local keyCode = (Enum.KeyCode :: any)[toggleKey]
 	if not keyCode then
-		warn(`Karet.Terminal:enableSwitch — '{toggleKey}' is not a valid KeyCode name`)
+		warn(`Karet.Terminal:enableSwitch - '{toggleKey}' is not a valid KeyCode name`)
 		return
 	end
 
 	self.switch = Switch
 	local Enums = Switch.Enums
-	Switch.PushContext(CLOSED_CONTEXT)
 
 	local function action(name: string, bindings: { any }, contexts: { string }?, handler: (any) -> ())
 		local handle = Switch.Define(name, { Bindings = bindings, Contexts = contexts, Sink = true })
@@ -2773,10 +3259,12 @@ function Terminal:enableSwitch(toggleKey: string)
 		table.insert(self.actions, name)
 	end
 
-	action("KaretOpen", { keyCode }, { CLOSED_CONTEXT }, function(event)
+	-- Global toggle: always active, flips based on current state.
+	action("KaretToggle", { keyCode }, nil, function(event)
 		event:Consume()
-		self:open()
+		self:toggle()
 	end)
+	-- Escape closes; history nav - only while the terminal is open.
 	action("KaretClose", { Enum.KeyCode.Escape }, { OPEN_CONTEXT }, function(event)
 		event:Consume()
 		self:close()
@@ -2831,7 +3319,6 @@ function Terminal:destroy()
 			self.switch.Remove(name)
 		end
 		self.switch.PopContext(OPEN_CONTEXT)
-		self.switch.PopContext(CLOSED_CONTEXT)
 	end
 	self.output:destroy()
 	self.input:destroy()
@@ -2840,7 +3327,7 @@ end
 
 return Terminal
 ]])
-mod("Input", _6, [[
+mod("Input", _8, [[
 -- The terminal's input row: a Prompt sigil + a real TextBox.
 --
 -- The TextBox does the actual typing (characters, IME, clipboard, caret) — Switch is not
@@ -2993,7 +3480,7 @@ end
 
 return Input
 ]])
-mod("Output", _6, [[
+mod("Output", _8, [[
 -- The terminal's scrolling output log. Each line is a TextLabel coloured by a semantic
 -- theme group (Output / Error / Warn / Info / Success / Comment for echoes), so a theme
 -- switch recolours the whole backlog. Lines remember their group, which is what lets
@@ -3103,7 +3590,7 @@ end
 
 return Output
 ]])
-mod("create", _6, [[
+mod("create", _8, [[
 -- Tiny declarative Instance builder for the terminal UI.
 --
 -- create("Frame", { Size = ..., Children = { ... }, Parent = ... }) sets every property,
@@ -3134,7 +3621,7 @@ end
 
 return create
 ]])
-local _7 = mod("Theme", _1, [[
+local _9 = mod("Theme", _1, [[
 -- Karet.Theme — one semantic colorscheme, piped through every surface (DESIGN → Theme).
 --
 -- A theme is NOT a set of raw frame colors; it is a set of *semantic highlight groups*
@@ -3570,7 +4057,7 @@ Theme.Set("tokyonight")
 
 return Theme
 ]])
-local _8 = mod("Types", _1, [[
+local _10 = mod("Types", _1, [[
 -- Karet's argument type system. A type knows how to Parse a raw token into a value, and
 -- to Validate that value. `coerce` tries a union of types left-to-right (the first that
 -- parses AND validates wins — GRAMMAR/DESIGN), so handlers never type-check. `satisfies`
@@ -3951,4 +4438,4 @@ end
 return deps
 ]])
 
-print("[Karet] installed 19 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 21 modules under ReplicatedStorage.Karet")

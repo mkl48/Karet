@@ -17,6 +17,8 @@ local Registry = require(script.Registry)
 local Types = require(script.Types)
 local Host = require(script.Host)
 local Networking = require(script.Networking)
+local Commands = require(script.Commands)
+local Kaveat = require(script.Kaveat)
 
 local Karet = {}
 
@@ -49,6 +51,9 @@ Karet.Theme = Theme
 -- The terminal surface (class). Karet.Start builds and mounts one on the client.
 Karet.Terminal = Terminal
 
+-- Kaveat, the built-in Luau editor (scaffold). Enable with Start{ Kaveat = true }.
+Karet.Kaveat = Kaveat
+
 -- Config the server stashes (rate limiting etc. land in a later layer).
 Karet.Config = {}
 
@@ -69,6 +74,15 @@ end
 -- Register a custom argument type (à la Cmdr/Conch).
 function Karet.DefineType(name: string, def: any)
 	types:Define(name, def)
+end
+
+-- Names of all registered commands, and a single command's definition.
+function Karet.List(): { string }
+	return registry:list()
+end
+
+function Karet.Get(name: string): any?
+	return registry:get(name)
 end
 
 -- ---------------------------------------------------------------------------
@@ -145,10 +159,39 @@ local function startClient(options: { [string]: any })
 		Karet.Theme.Set(options.Theme)
 	end
 
-	local terminal = Terminal.new()
+	local terminal = Terminal.new(options)
 	terminal:mount()
 	if options.Toggle then
 		terminal:enableSwitch(options.Toggle)
+	end
+
+	-- Built-in commands (help/clear/echo/theme/...), unless opted out.
+	if options.BuiltIns ~= false then
+		local services = {
+			clear = function()
+				terminal:clear()
+			end,
+			setTheme = function(name)
+				Karet.Theme.Set(name)
+			end,
+			listThemes = function()
+				return Karet.Theme.List()
+			end,
+			list = function()
+				return registry:list()
+			end,
+			get = function(name)
+				return registry:get(name)
+			end,
+			playerName = function()
+				local p = Players.LocalPlayer
+				return p and p.Name or "client"
+			end,
+			version = Karet.Version,
+		}
+		for _, def in Commands.build(services) do
+			registry:register(def)
+		end
 	end
 
 	local networking = Networking.new()
@@ -184,6 +227,13 @@ local function startClient(options: { [string]: any })
 			terminal:error(result.error)
 		end
 	end)
+
+	-- Kaveat editor (scaffold), mounted beside the terminal if enabled.
+	if options.Kaveat then
+		local editor = Kaveat.new({ Parent = terminal.gui.Parent })
+		editor:mount(terminal.gui.Parent)
+		Karet.Editor = editor
+	end
 
 	Karet.Active = terminal
 	Karet.Host = host

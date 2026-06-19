@@ -6,9 +6,10 @@
 -- is client-only it is required lazily inside enableSwitch(), never at module load, so the
 -- Karet umbrella that requires this module stays safe to load on the server.
 --
--- Text entry itself is the Input row's TextBox — Switch is not in that path. The toggle
--- key therefore types normally while the terminal is open: the open action lives in a
--- "KaretClosed" context that is swapped out for "KaretTerminal" the moment it opens.
+-- Text entry itself is the Input row's TextBox - Switch is not in that path. The toggle is
+-- a single global action driven off the open state; while open, an OPEN_CONTEXT carries the
+-- Escape-to-close and Up/Down history actions. Placement (Window/Top/Bottom) and the mount
+-- parent are configurable via Terminal.new(opts) / :mount().
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -23,11 +24,21 @@ local Terminal = {}
 Terminal.__index = Terminal
 
 local OPEN_CONTEXT = "KaretTerminal"
-local CLOSED_CONTEXT = "KaretClosed"
 
-function Terminal.new()
+-- Window geometry per placement mode. Custom Size/Position in opts override these.
+local PLACEMENTS = {
+	Window = { Anchor = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(640, 340) },
+	Top = { Anchor = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 8), Size = UDim2.new(1, -16, 0, 320) },
+	Bottom = { Anchor = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(1, -16, 0, 320) },
+}
+
+-- opts: { Placement = "Window"|"Top"|"Bottom", Parent = Instance?, Size = UDim2?, Position = UDim2? }
+function Terminal.new(opts: { [string]: any }?)
 	local self = setmetatable({}, Terminal)
+	local options = opts or {}
 
+	self.options = options
+	self.placement = PLACEMENTS[options.Placement or "Window"] or PLACEMENTS.Window
 	self.isOpen = false
 	self.switch = nil :: any -- the Switch module, once enableSwitch resolves it
 	self.actions = {} :: { string } -- Switch action names, for teardown
@@ -81,9 +92,9 @@ function Terminal.new()
 
 	local window = create("Frame", {
 		Name = "Window",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(640, 340),
+		AnchorPoint = self.placement.Anchor,
+		Position = options.Position or self.placement.Position,
+		Size = options.Size or self.placement.Size,
 		BorderSizePixel = 0,
 		Visible = false,
 		Children = {
@@ -132,9 +143,10 @@ function Terminal.new()
 	return self
 end
 
--- Parent the ScreenGui. On the client, defaults to the local player's PlayerGui.
+-- Parent the ScreenGui. Uses the target arg, else opts.Parent, else (on the client) the
+-- local player's PlayerGui. A custom Parent can be any GuiBase2d/ScreenGui/CoreGui surface.
 function Terminal:mount(target: Instance?)
-	local parent = target
+	local parent = target or self.options.Parent
 	if not parent and RunService:IsClient() then
 		local player = Players.LocalPlayer
 		parent = player and player:FindFirstChildOfClass("PlayerGui")
@@ -142,7 +154,7 @@ function Terminal:mount(target: Instance?)
 	if parent then
 		self.gui.Parent = parent
 	else
-		warn("Karet.Terminal:mount — no parent given and no PlayerGui found")
+		warn("Karet.Terminal:mount - no parent given and no PlayerGui found")
 	end
 	return self
 end
@@ -173,7 +185,6 @@ function Terminal:open()
 	self.isOpen = true
 	self.window.Visible = true
 	if self.switch then
-		self.switch.PopContext(CLOSED_CONTEXT)
 		self.switch.PushContext(OPEN_CONTEXT)
 	end
 	self.input:focus()
@@ -188,7 +199,6 @@ function Terminal:close()
 	self.window.Visible = false
 	if self.switch then
 		self.switch.PopContext(OPEN_CONTEXT)
-		self.switch.PushContext(CLOSED_CONTEXT)
 	end
 end
 
@@ -200,12 +210,17 @@ function Terminal:toggle()
 	end
 end
 
--- Wire the open/close/history actions through Switch. toggleKey is a KeyCode name string
+-- Wire the toggle/close/history actions through Switch. toggleKey is a KeyCode name string
 -- (e.g. "Semicolon"). Client-only; degrades to a no-op with a warning if Switch is
 -- unavailable, so the terminal still works programmatically and via mouse focus.
+--
+-- The toggle is a single global action driven off self.isOpen (so it never desyncs from a
+-- programmatic open/close). Note: a global toggle key cannot also be *typed* into a command
+-- while the terminal is open - pick a key you wouldn't type (the default ; is fine). Escape
+-- closes; Up/Down browse history (only while open, via the OPEN_CONTEXT).
 function Terminal:enableSwitch(toggleKey: string)
 	if not RunService:IsClient() then
-		warn("Karet.Terminal:enableSwitch — Switch is client-only; ignoring on the server")
+		warn("Karet.Terminal:enableSwitch - Switch is client-only; ignoring on the server")
 		return
 	end
 	local Switch = deps.Switch()
@@ -214,13 +229,12 @@ function Terminal:enableSwitch(toggleKey: string)
 	end
 	local keyCode = (Enum.KeyCode :: any)[toggleKey]
 	if not keyCode then
-		warn(`Karet.Terminal:enableSwitch — '{toggleKey}' is not a valid KeyCode name`)
+		warn(`Karet.Terminal:enableSwitch - '{toggleKey}' is not a valid KeyCode name`)
 		return
 	end
 
 	self.switch = Switch
 	local Enums = Switch.Enums
-	Switch.PushContext(CLOSED_CONTEXT)
 
 	local function action(name: string, bindings: { any }, contexts: { string }?, handler: (any) -> ())
 		local handle = Switch.Define(name, { Bindings = bindings, Contexts = contexts, Sink = true })
@@ -228,10 +242,12 @@ function Terminal:enableSwitch(toggleKey: string)
 		table.insert(self.actions, name)
 	end
 
-	action("KaretOpen", { keyCode }, { CLOSED_CONTEXT }, function(event)
+	-- Global toggle: always active, flips based on current state.
+	action("KaretToggle", { keyCode }, nil, function(event)
 		event:Consume()
-		self:open()
+		self:toggle()
 	end)
+	-- Escape closes; history nav - only while the terminal is open.
 	action("KaretClose", { Enum.KeyCode.Escape }, { OPEN_CONTEXT }, function(event)
 		event:Consume()
 		self:close()
@@ -286,7 +302,6 @@ function Terminal:destroy()
 			self.switch.Remove(name)
 		end
 		self.switch.PopContext(OPEN_CONTEXT)
-		self.switch.PopContext(CLOSED_CONTEXT)
 	end
 	self.output:destroy()
 	self.input:destroy()

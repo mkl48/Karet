@@ -17,6 +17,7 @@ local FILES = {
 	Context = "src/Context/init.luau",
 	Host = "src/Host.luau",
 	Networking = "src/Networking/init.luau",
+	Commands = "src/Commands/init.luau",
 	deps = "src/deps.luau",
 }
 
