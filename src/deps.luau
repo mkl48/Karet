@@ -43,4 +43,9 @@ function deps.Substance(): any?
 	return resolve("Substance")
 end
 
+-- Iris - immediate-mode UI, used by Kaveat. Vendored under the Karet module.
+function deps.Iris(): any?
+	return resolve("Iris")
+end
+
 return deps

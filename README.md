@@ -49,14 +49,15 @@ Switch and Substance.
 
 ## Installation
 
+Switch, Substance, and Iris are **vendored inside `src/`** (MIT, attribution kept), so Karet
+ships with everything it needs - no separate dependency install.
+
 ### Wally
 
 ```toml
 # wally.toml
 [dependencies]
 Karet = "kr3ative/karet@0.1.0"
-Switch = "ker/switch@0.1.0"
-Substance = "ker/substance@0.1.0"
 ```
 
 ```sh
@@ -66,8 +67,8 @@ wally install
 ### Command-bar installer (no toolchain)
 
 Paste [`dist/install.luau`](dist/install.luau) into the Roblox Studio command bar - it
-recreates the whole `Karet` module tree under `ReplicatedStorage`. (Drop `Switch` and
-`Substance` ModuleScripts *inside* the `Karet` module, for input + networking.)
+recreates the whole `Karet` module tree (deps included) under `ReplicatedStorage`. Nothing
+else to set up.
 
 Regenerate it from source any time with:
 

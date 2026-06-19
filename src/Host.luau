@@ -53,6 +53,8 @@ function Host.new(opts: Options)
 	local hooks: Hooks = opts.hooks or { pre = {}, post = {}, onErr = {} }
 	local auth: Auth = opts.auth or {}
 	local networking = opts.networking
+	local cache = opts.cache
+	local query = opts.query
 	local isServer = opts.isServer == true
 	local isClient = opts.isClient == true
 
@@ -143,6 +145,8 @@ function Host.new(opts: Options)
 			role = roleInfo and roleInfo.role,
 			rank = roleInfo and roleInfo.rank,
 			sink = sink,
+			cache = cache,
+			query = query,
 		})
 
 		for _, pre in hooks.pre do

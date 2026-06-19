@@ -22,6 +22,8 @@ export type Options = {
 	role: string?,
 	rank: number?,
 	sink: (group: string, message: string) -> (), -- group = a Karet.Theme group name
+	cache: any?, -- the global Karet.Cache
+	query: any?, -- the global Karet.Query
 }
 
 export type Control = {
@@ -55,6 +57,8 @@ function Context.new(opts: Options): (any, Control)
 		ExecutedAt = os.clock(),
 		Role = opts.role,
 		Rank = opts.rank,
+		Cache = opts.cache, -- global key/value cache (ctx.Cache:Get/Set/...)
+		Query = opts.query, -- named-query service (ctx.Query:Run("players"))
 	}
 
 	function ctx.Print(message: any)

@@ -19,6 +19,8 @@ local Host = require(script.Host)
 local Networking = require(script.Networking)
 local Commands = require(script.Commands)
 local Kaveat = require(script.Kaveat)
+local Cache = require(script.Cache)
+local Query = require(script.Query)
 
 local Karet = {}
 
@@ -30,8 +32,15 @@ Karet.Version = "0.1.0"
 
 local registry = Registry.new()
 local types = Types.new()
+local cache = Cache.new()
+local query = Query.new()
 local hooks = { pre = {}, post = {}, onErr = {}, onConnect = {} }
 local auth = { allowed = {} :: { [number]: boolean }, denied = {} :: { [number]: boolean }, defaultRole = "User" }
+
+-- A built-in query so commands can list commands uniformly: ctx.Query:Run("commands").
+query:Register("commands", function()
+	return registry:list()
+end)
 
 -- ---------------------------------------------------------------------------
 -- shell surface
@@ -53,6 +62,11 @@ Karet.Terminal = Terminal
 
 -- Kaveat, the built-in Luau editor (scaffold). Enable with Start{ Kaveat = true }.
 Karet.Kaveat = Kaveat
+
+-- Global key/value cache + named-query service, also reachable from handlers as
+-- ctx.Cache / ctx.Query. One instance per realm.
+Karet.Cache = cache
+Karet.Query = query
 
 -- Config the server stashes (rate limiting etc. land in a later layer).
 Karet.Config = {}
@@ -206,6 +220,8 @@ local function startClient(options: { [string]: any })
 		hooks = hooks,
 		auth = buildAuth(),
 		networking = networking,
+		cache = cache,
+		query = query,
 	})
 	local evaluator = Shell.newEvaluator(host)
 
@@ -256,6 +272,8 @@ local function startServer(options: { [string]: any })
 		hooks = hooks,
 		auth = buildAuth(),
 		networking = networking,
+		cache = cache,
+		query = query,
 	})
 	networking:listen(function(request, player)
 		return host.runServerRequest(request, player)

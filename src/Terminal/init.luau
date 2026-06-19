@@ -1,18 +1,21 @@
--- Karet.Terminal — the visible console surface (the Alacritty analogue).
+-- Karet.Terminal - the visible console surface (the Alacritty analogue).
 --
--- Composes the window chrome, the scrolling Output log, and the Input row, drives them
--- all from the active Karet.Theme (recolouring live on a theme switch), and owns the
--- open/close lifecycle. Switch provides the toggle/close/history *actions*; because Switch
--- is client-only it is required lazily inside enableSwitch(), never at module load, so the
--- Karet umbrella that requires this module stays safe to load on the server.
+-- Composes the window chrome, the scrolling Output log, and the Input row, drives them all
+-- from the active Karet.Theme (recolouring live on a theme switch), and owns the open/close
+-- lifecycle. Switch provides the toggle/close *actions*; because Switch is client-only it is
+-- required lazily inside enableSwitch(), never at module load, so the Karet umbrella that
+-- requires this module stays safe to load on the server.
 --
--- Text entry itself is the Input row's TextBox - Switch is not in that path. The toggle is
--- a single global action driven off the open state; while open, an OPEN_CONTEXT carries the
--- Escape-to-close and Up/Down history actions. Placement (Window/Top/Bottom) and the mount
--- parent are configurable via Terminal.new(opts) / :mount().
+-- Two presentations:
+--   • full window (default) - title bar + scrolling output + input, optionally Draggable.
+--   • Compact = true        - a single-line command bar (Top/Bottom/Middle) that grows by
+--                             one line to show the latest result, then collapses on clear.
+--
+-- Placement, Parent, Size, Position are all configurable via Terminal.new(opts) / :mount().
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 
 local Theme = require(script.Parent.Theme)
 local deps = require(script.Parent.deps)
@@ -25,25 +28,69 @@ Terminal.__index = Terminal
 
 local OPEN_CONTEXT = "KaretTerminal"
 
--- Window geometry per placement mode. Custom Size/Position in opts override these.
+-- Full-window geometry per placement mode. Custom Size/Position in opts override these.
 local PLACEMENTS = {
 	Window = { Anchor = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(640, 340) },
 	Top = { Anchor = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 8), Size = UDim2.new(1, -16, 0, 320) },
 	Bottom = { Anchor = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(1, -16, 0, 320) },
 }
 
--- opts: { Placement = "Window"|"Top"|"Bottom", Parent = Instance?, Size = UDim2?, Position = UDim2? }
+-- Compact single-line bar geometry. Height grows by RESULT_H when there's a result to show.
+local BAR_H = 34
+local RESULT_H = 24
+local COMPACT_PLACEMENTS = {
+	Top = { Anchor = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 8), Size = UDim2.new(1, -16, 0, BAR_H) },
+	Bottom = { Anchor = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(1, -16, 0, BAR_H) },
+	Middle = { Anchor = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(560, BAR_H) },
+}
+
+-- opts: { Compact = boolean?, Placement = string?, Parent = Instance?, Size = UDim2?,
+--         Position = UDim2?, Draggable = boolean? }
 function Terminal.new(opts: { [string]: any }?)
 	local self = setmetatable({}, Terminal)
 	local options = opts or {}
 
 	self.options = options
-	self.placement = PLACEMENTS[options.Placement or "Window"] or PLACEMENTS.Window
+	self.compact = options.Compact == true
 	self.isOpen = false
-	self.switch = nil :: any -- the Switch module, once enableSwitch resolves it
-	self.actions = {} :: { string } -- Switch action names, for teardown
-	self.themed = {} :: { [string]: any } -- chrome instances keyed by their theme group
+	self.switch = nil :: any
+	self.actions = {} :: { string }
+	self.themed = {} :: { [string]: any }
+	self.palette = nil :: any
 
+	if self.compact then
+		self.placement = COMPACT_PLACEMENTS[options.Placement or "Bottom"] or COMPACT_PLACEMENTS.Bottom
+		self:buildCompact(options)
+	else
+		self.placement = PLACEMENTS[options.Placement or "Window"] or PLACEMENTS.Window
+		self:buildWindow(options)
+	end
+
+	-- Recolour everything now and whenever the theme changes.
+	self.unsubscribeTheme = Theme.OnChanged(function(palette)
+		self:applyTheme(palette)
+	end)
+
+	return self
+end
+
+local function makeGui(window: Instance): Instance
+	return create("ScreenGui", {
+		Name = "Karet",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 10,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		Enabled = true,
+		Children = { window },
+	})
+end
+
+-- ---------------------------------------------------------------------------
+-- full window
+-- ---------------------------------------------------------------------------
+
+function Terminal:buildWindow(options)
 	local title = create("TextLabel", {
 		Name = "Title",
 		BackgroundTransparency = 1,
@@ -60,10 +107,7 @@ function Terminal.new(opts: { [string]: any }?)
 		Name = "TitleBar",
 		BorderSizePixel = 0,
 		Size = UDim2.new(1, 0, 0, 24),
-		Children = {
-			create("UICorner", { CornerRadius = UDim.new(0, 8) }),
-			title,
-		},
+		Children = { create("UICorner", { CornerRadius = UDim.new(0, 8) }), title },
 	})
 
 	local separator = create("Frame", {
@@ -73,7 +117,6 @@ function Terminal.new(opts: { [string]: any }?)
 		Position = UDim2.new(0, 0, 0, 24),
 	})
 
-	-- Holders so Output fills the space above the fixed-height Input row.
 	local outputHolder = create("Frame", {
 		Name = "OutputHolder",
 		BackgroundTransparency = 1,
@@ -107,17 +150,7 @@ function Terminal.new(opts: { [string]: any }?)
 		},
 	})
 
-	local gui = create("ScreenGui", {
-		Name = "Karet",
-		ResetOnSpawn = false,
-		IgnoreGuiInset = true,
-		DisplayOrder = 10,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		Enabled = true,
-		Children = { window },
-	})
-
-	self.gui = gui
+	self.gui = makeGui(window)
 	self.window = window
 	self.output = Output.new(outputHolder)
 	self.input = Input.new(inputHolder)
@@ -127,24 +160,122 @@ function Terminal.new(opts: { [string]: any }?)
 	self.themed.Accent = title
 	self.themed.Border = { stroke, separator }
 
-	-- Echo the submitted line, then hand it to the external submit handler.
+	self:wireSubmit()
+
+	-- Optional dragging by the title bar (Window placement only - docked bars stay put).
+	if options.Draggable and (options.Placement or "Window") == "Window" then
+		self:enableDrag(titleBar, window)
+	end
+end
+
+function Terminal:enableDrag(handle: Instance, window: Instance)
+	local dragging, dragStart, startPos = false, Vector3.zero, UDim2.new()
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = window.Position
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			window.Position =
+				UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+end
+
+-- ---------------------------------------------------------------------------
+-- compact single-line bar
+-- ---------------------------------------------------------------------------
+
+function Terminal:buildCompact(options)
+	local resultLabel = create("TextLabel", {
+		Name = "Result",
+		BackgroundTransparency = 1,
+		Visible = false,
+		Size = UDim2.new(1, -16, 0, RESULT_H - 2),
+		Position = UDim2.new(0, 8, 0, 4),
+		Font = Enum.Font.Code,
+		TextSize = 14,
+		Text = "",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	}) :: TextLabel
+
+	local inputHolder = create("Frame", {
+		Name = "InputHolder",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, BAR_H - 4),
+		Position = UDim2.new(0, 0, 1, -(BAR_H - 4)),
+	})
+
+	local stroke = create("UIStroke", { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+
+	local window = create("Frame", {
+		Name = "Window",
+		AnchorPoint = self.placement.Anchor,
+		Position = options.Position or self.placement.Position,
+		Size = options.Size or self.placement.Size,
+		BorderSizePixel = 0,
+		Visible = false,
+		Children = { create("UICorner", { CornerRadius = UDim.new(0, 8) }), stroke, resultLabel, inputHolder },
+	})
+
+	self.gui = makeGui(window)
+	self.window = window
+	self.resultLabel = resultLabel
+	self.input = Input.new(inputHolder)
+
+	self.themed.Background = window
+	self.themed.Border = { stroke }
+
+	self:wireSubmit()
+end
+
+-- Compact: show the latest line and grow the bar by one row; collapse on clear.
+function Terminal:setResult(group: string, text: string)
+	local label = self.resultLabel
+	label.Text = text
+	if self.palette then
+		label.TextColor3 = self.palette[group] or self.palette.Output
+	end
+	label.Visible = true
+	local w = self.placement.Size
+	self.window.Size = UDim2.new(w.Width.Scale, w.Width.Offset, 0, BAR_H + RESULT_H)
+end
+
+-- ---------------------------------------------------------------------------
+-- shared
+-- ---------------------------------------------------------------------------
+
+function Terminal:wireSubmit()
 	self.input:onSubmit(function(line)
-		self.output:append(`› {line}`, "Comment")
+		if not self.compact then
+			self.output:append(`› {line}`, "Comment")
+		end
 		if self.submitHandler then
 			self.submitHandler(line)
 		end
 	end)
-
-	-- Recolour everything now and whenever the theme changes.
-	self.unsubscribeTheme = Theme.OnChanged(function(palette)
-		self:applyTheme(palette)
-	end)
-
-	return self
 end
 
--- Parent the ScreenGui. Uses the target arg, else opts.Parent, else (on the client) the
--- local player's PlayerGui. A custom Parent can be any GuiBase2d/ScreenGui/CoreGui surface.
+-- One sink for all output, branching on presentation.
+function Terminal:emit(group: string, text: string)
+	if self.compact then
+		self:setResult(group, text)
+	else
+		self.output:append(text, group)
+	end
+end
+
 function Terminal:mount(target: Instance?)
 	local parent = target or self.options.Parent
 	if not parent and RunService:IsClient() then
@@ -160,17 +291,24 @@ function Terminal:mount(target: Instance?)
 end
 
 function Terminal:applyTheme(palette: { [string]: Color3 })
+	self.palette = palette
 	self.window.BackgroundColor3 = palette.Background
-	self.themed.Surface.BackgroundColor3 = palette.Surface
-	self.themed.Accent.TextColor3 = palette.Accent
 	for _, inst in self.themed.Border do
-		if inst:IsA("UIStroke") then
-			inst.Color = palette.Border
-		else
-			inst.BackgroundColor3 = palette.Border
-		end
+		inst.Color = palette.Border
 	end
-	self.output:applyTheme(palette)
+	if self.compact then
+		self.resultLabel.TextColor3 = palette.Foreground
+	else
+		self.themed.Surface.BackgroundColor3 = palette.Surface
+		self.themed.Accent.TextColor3 = palette.Accent
+		-- separators are in themed.Border as Frames; recolour them too
+		for _, inst in self.themed.Border do
+			if not inst:IsA("UIStroke") then
+				inst.BackgroundColor3 = palette.Border
+			end
+		end
+		self.output:applyTheme(palette)
+	end
 	self.input:applyTheme(palette)
 end
 
@@ -210,15 +348,29 @@ function Terminal:toggle()
 	end
 end
 
--- Wire the toggle/close/history actions through Switch. toggleKey is a KeyCode name string
--- (e.g. "Semicolon"). Client-only; degrades to a no-op with a warning if Switch is
--- unavailable, so the terminal still works programmatically and via mouse focus.
---
--- The toggle is a single global action driven off self.isOpen (so it never desyncs from a
--- programmatic open/close). Note: a global toggle key cannot also be *typed* into a command
--- while the terminal is open - pick a key you wouldn't type (the default ; is fine). Escape
--- closes; Up/Down browse history (only while open, via the OPEN_CONTEXT).
-function Terminal:enableSwitch(toggleKey: string)
+-- Parse a toggle spec into (keyName, modifierName?). Accepts:
+--   "Semicolon"                            -> a single key
+--   "LeftControl+Semicolon"                -> a shortcut (modifier + key)
+--   { Key = "Semicolon", Modifier = "..." } -> the explicit table form
+local function parseToggle(toggle: any): (string?, string?)
+	if type(toggle) == "table" then
+		return toggle.Key, toggle.Modifier
+	end
+	local s = tostring(toggle)
+	local mod, key = string.match(s, "^(%w+)%+(%w+)$")
+	if mod then
+		return key, mod
+	end
+	return s, nil
+end
+
+-- Wire the toggle/close actions through Switch. `toggle` is a KeyCode name ("Semicolon"),
+-- a shortcut ("LeftControl+Semicolon" or { Key=..., Modifier=... }). Client-only; degrades
+-- to a no-op with a warning if Switch is unavailable. The toggle is a single global action
+-- driven off self.isOpen (so it never desyncs from a programmatic open/close). A plain
+-- (modifier-less) global toggle key can't also be typed into a command while open - either
+-- pick a key you wouldn't type, or use a modifier shortcut. Escape closes.
+function Terminal:enableSwitch(toggle: any)
 	if not RunService:IsClient() then
 		warn("Karet.Terminal:enableSwitch - Switch is client-only; ignoring on the server")
 		return
@@ -227,36 +379,46 @@ function Terminal:enableSwitch(toggleKey: string)
 	if not Switch then
 		return
 	end
-	local keyCode = (Enum.KeyCode :: any)[toggleKey]
+
+	local keyName, modName = parseToggle(toggle)
+	local keyCode = keyName and (Enum.KeyCode :: any)[keyName]
 	if not keyCode then
-		warn(`Karet.Terminal:enableSwitch - '{toggleKey}' is not a valid KeyCode name`)
+		warn(`Karet.Terminal:enableSwitch - '{tostring(keyName)}' is not a valid KeyCode name`)
+		return
+	end
+	local modCode = modName and (Enum.KeyCode :: any)[modName] or nil
+	if modName and not modCode then
+		warn(`Karet.Terminal:enableSwitch - '{modName}' is not a valid modifier KeyCode`)
 		return
 	end
 
 	self.switch = Switch
 	local Enums = Switch.Enums
 
-	local function action(name: string, bindings: { any }, contexts: { string }?, handler: (any) -> ())
-		local handle = Switch.Define(name, { Bindings = bindings, Contexts = contexts, Sink = true })
+	local function action(name: string, config: { [string]: any }, handler: (any) -> ())
+		config.Sink = true
+		local handle = Switch.Define(name, config)
 		handle:Next(Enums.State.Pressed):Then(handler)
 		table.insert(self.actions, name)
 	end
 
-	-- Global toggle: always active, flips based on current state.
-	action("KaretToggle", { keyCode }, nil, function(event)
+	-- Toggle: a Shortcut (modifier+key) if a modifier was given, else a plain key. Global.
+	local toggleConfig
+	if modCode then
+		toggleConfig = { Bindings = { { KeyCode = keyCode, Modifier = modCode } }, Mode = Enums.Mode.Shortcut }
+	else
+		toggleConfig = { Bindings = { keyCode } }
+	end
+	action("KaretToggle", toggleConfig, function(event)
 		event:Consume()
 		self:toggle()
 	end)
-	-- Escape closes; history nav - only while the terminal is open.
-	action("KaretClose", { Enum.KeyCode.Escape }, { OPEN_CONTEXT }, function(event)
+
+	-- Escape closes. (Up/Down history is handled in Input via UserInputService, since arrow
+	-- actions don't fire reliably through Switch while the TextBox holds focus.)
+	action("KaretClose", { Bindings = { Enum.KeyCode.Escape }, Contexts = { OPEN_CONTEXT } }, function(event)
 		event:Consume()
 		self:close()
-	end)
-	action("KaretHistoryPrev", { Enum.KeyCode.Up }, { OPEN_CONTEXT }, function()
-		self.input:historyPrev()
-	end)
-	action("KaretHistoryNext", { Enum.KeyCode.Down }, { OPEN_CONTEXT }, function()
-		self.input:historyNext()
 	end)
 end
 
@@ -265,30 +427,36 @@ end
 -- ---------------------------------------------------------------------------
 
 function Terminal:print(text: string, group: string?)
-	self.output:append(text, group or "Output")
+	self:emit(group or "Output", text)
 end
 
 function Terminal:error(text: string)
-	self.output:append(text, "Error")
+	self:emit("Error", text)
 end
 
 function Terminal:warn(text: string)
-	self.output:append(text, "Warn")
+	self:emit("Warn", text)
 end
 
 function Terminal:info(text: string)
-	self.output:append(text, "Info")
+	self:emit("Info", text)
 end
 
 function Terminal:success(text: string)
-	self.output:append(text, "Success")
+	self:emit("Success", text)
 end
 
 function Terminal:clear()
-	self.output:clear()
+	if self.compact then
+		self.resultLabel.Visible = false
+		self.resultLabel.Text = ""
+		self.window.Size = self.placement.Size
+	else
+		self.output:clear()
+	end
 end
 
--- Register the handler that runs a submitted line (after it is echoed).
+-- Register the handler that runs a submitted line (after it is echoed, in full mode).
 function Terminal:onSubmit(fn: (string) -> ())
 	self.submitHandler = fn
 end
@@ -303,7 +471,9 @@ function Terminal:destroy()
 		end
 		self.switch.PopContext(OPEN_CONTEXT)
 	end
-	self.output:destroy()
+	if self.output then
+		self.output:destroy()
+	end
 	self.input:destroy()
 	self.gui:Destroy()
 end

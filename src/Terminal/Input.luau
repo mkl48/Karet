@@ -5,6 +5,8 @@
 -- orchestrator). Submitting fires onSubmit(line) and records the line in a command
 -- history that Up/Down navigate via historyPrev/historyNext.
 
+local UserInputService = game:GetService("UserInputService")
+
 local create = require(script.Parent.create)
 
 local Input = {}
@@ -22,6 +24,7 @@ function Input.new(parent: Instance)
 	self.draft = "" -- the in-progress line stashed while browsing history
 	self.submitHandler = nil :: ((string) -> ())?
 	self.palette = nil :: any
+	self.focused = false
 
 	local prompt = create("TextLabel", {
 		Name = "Prompt",
@@ -69,9 +72,27 @@ function Input.new(parent: Instance)
 	self.prompt = prompt
 	self.box = box
 
+	box.Focused:Connect(function()
+		self.focused = true
+	end)
 	box.FocusLost:Connect(function(enterPressed)
+		self.focused = false
 		if enterPressed then
 			self:submit()
+		end
+	end)
+
+	-- History via UserInputService: arrow actions routed through Switch don't fire reliably
+	-- while a TextBox holds keyboard focus, so we read Up/Down here whenever the box is
+	-- focused. This is what makes history repeatable (the old Switch path fired once).
+	self.inputConn = UserInputService.InputBegan:Connect(function(input)
+		if not self.focused then
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.Up then
+			self:historyPrev()
+		elseif input.KeyCode == Enum.KeyCode.Down then
+			self:historyNext()
 		end
 	end)
 
@@ -96,6 +117,13 @@ function Input:submit()
 			self.submitHandler(line)
 		end
 	end
+	-- Keep focus so you can fire commands back-to-back without re-clicking. Deferred so it
+	-- runs after this FocusLost finishes settling.
+	task.defer(function()
+		if self.box.Parent then
+			self.box:CaptureFocus()
+		end
+	end)
 end
 
 -- Older entry (Up arrow). Stashes the current draft on first step back.
@@ -144,6 +172,9 @@ function Input:applyTheme(palette: { [string]: Color3 })
 end
 
 function Input:destroy()
+	if self.inputConn then
+		self.inputConn:Disconnect()
+	end
 	self.frame:Destroy()
 	table.clear(self.history)
 end

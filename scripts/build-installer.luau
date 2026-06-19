@@ -57,15 +57,40 @@ end
 local moduleCount = 0
 local folderCount = 0
 
+-- A module folder is one with an init.lua / init.luau (vendored deps use .lua).
+local function moduleInit(dir: string): string?
+	for _, name in { "init.luau", "init.lua" } do
+		local path = dir .. "/" .. name
+		if exists(path) then
+			return path
+		end
+	end
+	return nil
+end
+
+-- A bundlable source file: *.lua / *.luau, excluding init and demo/test scripts.
+local function isSourceFile(entry: string): boolean
+	if entry == "init.lua" or entry == "init.luau" then
+		return false
+	end
+	if string.find(entry, "%.client%.") or string.find(entry, "%.server%.") then
+		return false
+	end
+	if string.find(entry, "%.spec%.") or string.find(entry, "%.story%.") then
+		return false
+	end
+	return string.match(entry, "%.luau?$") ~= nil
+end
+
 -- Emit the creation of `dir` as a node parented to `parentVar`, then recurse. Returns the
 -- local variable name bound to the created instance (so children can parent to it).
 local function build(dir: string, parentVar: string, name: string): string
 	local var = nextVar()
-	local initPath = dir .. "/init.luau"
+	local init = moduleInit(dir)
 
-	if exists(initPath) then
+	if init then
 		moduleCount += 1
-		emit(`local {var} = mod({q(name)}, {parentVar}, {longString(fs.readFile(initPath))})`)
+		emit(`local {var} = mod({q(name)}, {parentVar}, {longString(fs.readFile(init))})`)
 	else
 		folderCount += 1
 		emit(`local {var} = folder({q(name)}, {parentVar})`)
@@ -77,9 +102,9 @@ local function build(dir: string, parentVar: string, name: string): string
 		local path = dir .. "/" .. entry
 		if isDir(path) then
 			build(path, var, entry)
-		elseif entry ~= "init.luau" and string.match(entry, "%.luau$") then
+		elseif isSourceFile(entry) then
 			moduleCount += 1
-			local childName = string.gsub(entry, "%.luau$", "")
+			local childName = string.gsub(entry, "%.luau?$", "")
 			emit(`mod({q(childName)}, {var}, {longString(fs.readFile(path))})`)
 		end
 	end
@@ -95,10 +120,9 @@ local header = [[
 -- Paste this whole script into the Roblox Studio command bar to (re)install Karet into
 -- ReplicatedStorage. A previous install named "Karet" is replaced.
 --
--- Dependencies are NOT bundled: for input + networking, place Switch and Substance as
--- ModuleScripts named "Switch" / "Substance" INSIDE the Karet module (as children, beside
--- its source - that's where deps.luau looks). Without them, local (Shared/Client) commands
--- still work; the key toggle and Server/Context commands do not.
+-- Dependencies ARE bundled: Switch, Substance, and Iris are vendored under src/ (MIT,
+-- attribution in their LICENSE files), so they install as children of the Karet module and
+-- deps.luau resolves them with no extra setup. Nothing else to add.
 
 local RS = game:GetService("ReplicatedStorage")
 

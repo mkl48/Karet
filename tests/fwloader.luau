@@ -18,6 +18,8 @@ local FILES = {
 	Host = "src/Host.luau",
 	Networking = "src/Networking/init.luau",
 	Commands = "src/Commands/init.luau",
+	Cache = "src/Cache/init.luau",
+	Query = "src/Query/init.luau",
 	deps = "src/deps.luau",
 }
 

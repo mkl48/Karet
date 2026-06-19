@@ -14,6 +14,7 @@ local specs = {
 	{ name = "Registry", spec = require("./registry.spec") },
 	{ name = "Host", spec = require("./host.spec") },
 	{ name = "Commands", spec = require("./commands.spec") },
+	{ name = "Cache", spec = require("./cache.spec") },
 }
 
 local t = Harness.new()
