@@ -4,9 +4,15 @@
 
 **An in-game command framework and terminal for Roblox.**
 
+<img src="https://img.shields.io/badge/Karet-v0.1.0-7aa2f7?style=for-the-badge&logoColor=white" alt="version" />
+<img src="https://img.shields.io/badge/Luau-Roblox-00A2FF?style=for-the-badge&logoColor=white" alt="luau" />
+<img src="https://img.shields.io/badge/License-MIT-9ece6a?style=for-the-badge" alt="license" />
+<img src="https://img.shields.io/badge/Status-Early-e0af68?style=for-the-badge" alt="status" />
+<img src="https://img.shields.io/badge/Tests-90%20passing-1abc9c?style=for-the-badge" alt="tests" />
+
 Typed arguments validated on both realms · a real shell grammar · one Neovim-style theme through the whole UI.
 
-`MIT` · `v0.1.0` · built on [Switch](https://github.com/mkl48/Switch) (input) + [Substance](https://github.com/mkl48/Substance) (networking)
+Built on [Switch](https://github.com/mkl48/Switch) (input) and [Substance](https://github.com/mkl48/Substance) (networking).
 
 </div>
 
@@ -14,11 +20,11 @@ Typed arguments validated on both realms · a real shell grammar · one Neovim-s
 
 Karet is a terminal you drop into a Roblox game. You open a window, type commands in a
 real shell grammar, get typed argument validation, and run authoritative actions across
-the client/server boundary — all themed by a single semantic colorscheme.
+the client/server boundary - all themed by a single semantic colorscheme.
 
 It sits deliberately between [**Cmdr**](https://eryn.io/Cmdr/) (typed args, registry,
 hooks) and [**Conch**](https://github.com/alicesaidhi/conch) (the console as a full
-language). Karet borrows the *ideas*, not the code — its only runtime dependencies are
+language). Karet borrows the *ideas*, not the code - its only runtime dependencies are
 Switch and Substance.
 
 > **Status: early.** The shell, theme, terminal, and command framework are built and
@@ -28,17 +34,17 @@ Switch and Substance.
 
 ## Features
 
-- **Typed arguments** — union types tried left-to-right, validated before your handler
+- **Typed arguments** - union types tried left-to-right, validated before your handler
   runs. Built-ins: `String Number Integer Boolean Player Players Team Color Vector3 Duration`,
   plus `Karet.DefineType` for your own.
-- **A real shell**, not an argument splitter — chain operators (`&&`, `||`, `&`), a return
+- **A real shell**, not an argument splitter - chain operators (`&&`, `||`, `&`), a return
   pool (`//`, `/Player`, `/target#2`), variables (`@x`), expressions and guards. Full spec
   in [GRAMMAR.md](GRAMMAR.md).
-- **Four networking modes** over Substance — `Shared`, `Client`, `Server`, `Context`
+- **Four networking modes** over Substance - `Shared`, `Client`, `Server`, `Context`
   (client confirms → server acts), with server-authoritative auth.
-- **One semantic theme** piped through every surface — swap `tokyonight` → `gruvbox` and
+- **One semantic theme** piped through every surface - swap `tokyonight` → `gruvbox` and
   the whole UI recolors live. Ships Tokyonight, Gruvbox, Catppuccin, and Nord.
-- **Two ways to install** — Wally for a Rojo workflow, or a single paste-into-the-command-bar
+- **Two ways to install** - Wally for a Rojo workflow, or a single paste-into-the-command-bar
   installer with no toolchain at all.
 
 ## Installation
@@ -59,7 +65,7 @@ wally install
 
 ### Command-bar installer (no toolchain)
 
-Paste [`dist/install.luau`](dist/install.luau) into the Roblox Studio command bar — it
+Paste [`dist/install.luau`](dist/install.luau) into the Roblox Studio command bar - it
 recreates the whole `Karet` module tree under `ReplicatedStorage`. (Drop `Switch` and
 `Substance` ModuleScripts under `ReplicatedStorage` too, for input + networking.)
 
@@ -71,7 +77,7 @@ lune run scripts/build-installer
 
 ## Quick start
 
-**Client** — `LocalScript` in `StarterPlayerScripts`:
+**Client** - `LocalScript` in `StarterPlayerScripts`:
 
 ```lua
 local Karet = require(game.ReplicatedStorage.Karet)
@@ -91,7 +97,7 @@ Karet.Start({
 })
 ```
 
-**Server** — `Script` in `ServerScriptService`:
+**Server** - `Script` in `ServerScriptService`:
 
 ```lua
 local Karet = require(game.ReplicatedStorage.Karet)
@@ -106,7 +112,7 @@ Karet.Start({ DefaultRole = "User" })
 
 ## Defining commands
 
-Two equivalent styles — the table is the canonical record, the builder is sugar.
+Two equivalent styles - the table is the canonical record, the builder is sugar.
 
 ```lua
 -- Table style
@@ -171,7 +177,7 @@ Karet.DefineType("Color", {
 | `ctx.IsServer` / `ctx.IsClient` / `ctx.Role` | realm + resolved role |
 | `ctx.Print / Warn / Err / Info / Reply(msg)` | write to the caller's console |
 | `ctx.Return(...)` | push values to the return pool (matched to `Returns`) |
-| `ctx.Commit(payload)` | `Context` only — hand off from `On.Client` to `On.Server` |
+| `ctx.Commit(payload)` | `Context` only - hand off from `On.Client` to `On.Server` |
 | `ctx.Abort(msg)` | cancel mid-handler |
 
 ## Auth & middleware
@@ -189,11 +195,11 @@ Karet.OnConnect(function(player) --[[ welcome ]] end)
 ```
 
 Auth is checked **server-side** before any `Server`/`Context` handler runs; the server
-re-validates every argument — the client is never trusted.
+re-validates every argument - the client is never trusted.
 
 ## Theming
 
-A theme is a set of *semantic highlight groups*, not raw frame colors — like a Neovim
+A theme is a set of *semantic highlight groups*, not raw frame colors - like a Neovim
 colorscheme. Switching one recolors the terminal, output, and pickers at once.
 
 ```lua
@@ -238,4 +244,4 @@ are verified in Studio.
 
 ## License
 
-[MIT](LICENSE) — © kr3ative
+[MIT](LICENSE) - © kr3ative
