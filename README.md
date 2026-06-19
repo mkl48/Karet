@@ -67,7 +67,7 @@ wally install
 
 Paste [`dist/install.luau`](dist/install.luau) into the Roblox Studio command bar - it
 recreates the whole `Karet` module tree under `ReplicatedStorage`. (Drop `Switch` and
-`Substance` ModuleScripts under `ReplicatedStorage` too, for input + networking.)
+`Substance` ModuleScripts *inside* the `Karet` module, for input + networking.)
 
 Regenerate it from source any time with:
 

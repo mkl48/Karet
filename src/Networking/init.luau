@@ -5,9 +5,12 @@
 --   • client `invoke(request)`  -> yields, returns the server's { ok, returns?, error? }
 --   • server `listen(runner)`   -> runs `runner(request, player)` per incoming invocation
 --
--- A single Solve channel (RemoteFunction semantics) carries the request and the result.
--- Payloads are loose tables (DESIGN open-decision #1: loose by default) — the server
--- re-validates authoritatively in the Host before running anything.
+-- Substance is schema-first, so we Define an Atom for the request shape, give it a Solve
+-- (RemoteFunction) identity with :Compose, then :Post (client) / :Subscribe (server). Both
+-- realms construct Networking, so both register the same Atom. Payloads are intentionally
+-- loose (DESIGN open-decision #1): args/attributes/payload are Type.any() - the server
+-- re-validates authoritatively in the Host before running anything. The Solve subscriber's
+-- return value becomes the client Reaction's result.
 --
 -- NOTE: Substance isn't resolvable in the headless test environment, so this module is
 -- verified in-engine, not by the lune suite. Every Substance call is guarded; if the
@@ -18,12 +21,13 @@ local deps = require(script.Parent.deps)
 local Networking = {}
 Networking.__index = Networking
 
+local ATOM = "KaretCommandRequest"
 local CHANNEL = "KaretCommand"
 
 export type Request = {
 	name: string, -- command name
-	args: { [string]: any }, -- resolved (still-to-be-revalidated) args
-	attributes: { [string]: boolean }, -- flag set
+	args: { [string]: any }?, -- resolved (still-to-be-revalidated) args
+	attributes: { [string]: boolean }?, -- flag set
 	payload: any, -- Context command's committed payload, if any
 	rawInput: string?, -- the original line, for audit/re-parse
 }
@@ -33,17 +37,30 @@ export type Result = { ok: boolean, returns: { any }?, error: string? }
 function Networking.new()
 	local self = setmetatable({}, Networking)
 	self.substance = deps.Substance()
+	self.atom = nil :: any
 	self.ready = false
 	self.runner = nil :: ((Request, any) -> Result)?
 
 	if self.substance then
-		-- Define the command channel once. Loose schema; the Host re-validates.
-		local ok, err = pcall(function()
-			self.substance.Compose(CHANNEL, {}, "Solve")
+		-- Define the request Atom + give it a two-way Solve channel. Loose payload fields;
+		-- the Host re-validates. Wrapped so a Substance hiccup degrades instead of crashing.
+		local ok, atomOrErr = pcall(function()
+			local Type = self.substance.Type
+			local atom = self.substance.Define(ATOM, {
+				name = Type.string(),
+				args = Type.any():nullable(),
+				attributes = Type.any():nullable(),
+				payload = Type.any():nullable(),
+				rawInput = Type.string():nullable(),
+			})
+			atom:Compose(CHANNEL, "Solve")
+			return atom
 		end)
-		self.ready = ok
-		if not ok then
-			warn(`Karet.Networking: failed to compose channel — {err}`)
+		if ok then
+			self.atom = atomOrErr
+			self.ready = true
+		else
+			warn(`Karet.Networking: failed to define channel - {atomOrErr}`)
 		end
 	end
 
@@ -52,11 +69,11 @@ end
 
 -- CLIENT: send a command request to the server and yield for its result.
 function Networking:invoke(request: Request): Result
-	if not (self.substance and self.ready) then
+	if not (self.ready and self.atom) then
 		return { ok = false, error = "Karet networking unavailable (Substance not installed?)" }
 	end
 	local ok, result = pcall(function()
-		return self.substance.Post(CHANNEL, request):Await()
+		return self.atom:Post(request):Await()
 	end)
 	if not ok then
 		return { ok = false, error = `network error: {result}` }
@@ -67,15 +84,16 @@ function Networking:invoke(request: Request): Result
 	return result
 end
 
--- SERVER: register the function that authoritatively runs an incoming request. The
--- handler receives (request, callingPlayer) and must return a Result.
+-- SERVER: register the function that authoritatively runs an incoming request. The handler
+-- receives (request, callingPlayer) and must return a Result; that Result is what the Solve
+-- channel returns to the calling client.
 function Networking:listen(runner: (Request, any) -> Result)
 	self.runner = runner
-	if not (self.substance and self.ready) then
-		warn("Karet.Networking: cannot listen — Substance unavailable")
+	if not (self.ready and self.atom) then
+		warn("Karet.Networking: cannot listen - Substance unavailable")
 		return
 	end
-	self.substance.Subscribe(CHANNEL, function(request: Request, player: any): Result
+	self.atom:Subscribe(function(request: Request, player: any): Result
 		if not self.runner then
 			return { ok = false, error = "Karet server not ready" }
 		end
