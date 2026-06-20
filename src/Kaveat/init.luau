@@ -42,6 +42,17 @@ local function rgb(c: Color3): string
 	return string.format("rgb(%d,%d,%d)", math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
 end
 
+-- lucide icon per suggestion kind (the intellisense icons)
+local ICONS = {
+	global = "globe-2",
+	["local"] = "circle-dot",
+	["function"] = "square-function",
+	method = "function-square",
+	member = "code-2",
+	keyword = "key-round",
+	class = "whole-word",
+}
+
 export type Buffer = { name: string, context: string, source: string, dirty: boolean }
 
 function Kaveat.new(opts: { [string]: any }?)
@@ -65,6 +76,8 @@ function Kaveat.new(opts: { [string]: any }?)
 	self.cmdSugLabels = {}
 	self.acSuggestions = {}
 	self.acLabels = {}
+	self.lucide = deps.Lucide()
+	self.iconCache = {}
 
 	self:build(options)
 
@@ -420,31 +433,9 @@ function Kaveat:build(options)
 			end
 		end
 		self:refreshGutter()
-		if self._setting then
-			return
+		if not self._setting then
+			self:editorComplete()
 		end
-		-- tab: accept the top suggestion if the popup is open, else indent
-		if string.find(box.Text, "\t") then
-			if #self.acSuggestions > 0 then
-				local insert = self.acSuggestions[1].insert
-				self._setting = true
-				box.Text = string.gsub(box.Text, "([%w_]*)\t", insert, 1)
-				self._setting = false
-				if buf then
-					buf.source = box.Text
-				end
-				self:hideAc()
-			else
-				self._setting = true
-				box.Text = string.gsub(box.Text, "\t", "    ")
-				self._setting = false
-				if buf then
-					buf.source = box.Text
-				end
-			end
-			return
-		end
-		self:editorComplete()
 	end)
 
 	exit.MouseButton1Click:Connect(function()
@@ -532,6 +523,15 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 	end
 
 	if self.mode == "WRITE" then
+		if key == Enum.KeyCode.Tab then
+			-- roblox textboxes dont insert a tab, so we handle it: accept or indent
+			if #self.acSuggestions > 0 then
+				self:acceptAc(self.acSuggestions[1])
+			else
+				self:insertText("    ")
+			end
+			return
+		end
 		if key == Enum.KeyCode.Escape then
 			self.box:ReleaseFocus()
 		end
@@ -673,28 +673,121 @@ function Kaveat:renderAc()
 		if i > 8 then
 			break
 		end
-		local label = create("TextLabel", {
+		local row = create("Frame", {
 			Name = "Ac",
 			BackgroundColor3 = sel,
 			BackgroundTransparency = i == 1 and 0 or 1, -- top one is highlighted, tab takes it
 			Size = UDim2.new(1, 0, 0, 18),
+			LayoutOrder = i,
+			ZIndex = 10,
+			Parent = self.acFrame,
+		})
+		local asset = self:icon(s.detail)
+		if asset then
+			create("ImageLabel", {
+				Name = "Icon",
+				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(14, 14),
+				Position = UDim2.new(0, 0, 0.5, -7),
+				Image = asset.Url,
+				ImageRectSize = asset.ImageRectSize,
+				ImageRectOffset = asset.ImageRectOffset,
+				ImageColor3 = self:iconColor(s.detail),
+				ZIndex = 11,
+				Parent = row,
+			})
+		end
+		create("TextLabel", {
+			Name = "T",
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, -20, 1, 0),
+			Position = UDim2.new(0, 20, 0, 0),
 			Font = FONT,
 			TextSize = 13,
 			RichText = true,
 			Text = `{s.text}  <font color="{rgb(muted)}" size="11">{s.detail}</font>`,
 			TextColor3 = fg,
 			TextXAlignment = Enum.TextXAlignment.Left,
-			LayoutOrder = i,
-			ZIndex = 10,
-			Parent = self.acFrame,
+			ZIndex = 11,
+			Parent = row,
 		})
-		table.insert(self.acLabels, label)
+		table.insert(self.acLabels, row)
 	end
+end
+
+-- resolve a lucide asset for a suggestion kind (cached, degrades if the name is bad)
+function Kaveat:icon(detail: string): any?
+	if not self.lucide then
+		return nil
+	end
+	local name = ICONS[detail] or "file-code"
+	if self.iconCache[name] == nil then
+		local ok, asset = pcall(self.lucide.GetAsset, name, 48)
+		self.iconCache[name] = (ok and asset) or false
+	end
+	return self.iconCache[name] or nil
+end
+
+function Kaveat:iconColor(detail: string): Color3
+	local p = self.palette
+	if not p then
+		return Color3.new(1, 1, 1)
+	end
+	local map = {
+		global = p.Accent,
+		["local"] = p.Variable or p.Foreground,
+		["function"] = p.Function or p.Accent,
+		method = p.Function or p.Accent,
+		member = p.Field or p.Accent,
+		keyword = p.Keyword,
+		class = p.Type,
+	}
+	return map[detail] or p.Foreground
 end
 
 function Kaveat:hideAc()
 	self.acSuggestions = {}
 	self:renderAc()
+end
+
+-- replace the word being typed with the suggestion
+function Kaveat:acceptAc(s: any)
+	local text = self.box.Text
+	local cur = self.box.CursorPosition
+	if cur < 1 then
+		cur = #text + 1
+	end
+	local before = string.sub(text, 1, cur - 1)
+	local partial = string.match(before, "[%w_]*$") or ""
+	local newBefore = string.sub(before, 1, #before - #partial) .. s.insert
+	self._setting = true
+	self.box.Text = newBefore .. string.sub(text, cur)
+	self.box.CursorPosition = #newBefore + 1
+	self._setting = false
+	local buf = self.buffers[self.active]
+	if buf then
+		buf.source = self.box.Text
+		buf.dirty = true
+	end
+	self:hideAc()
+end
+
+function Kaveat:insertText(str: string)
+	local text = self.box.Text
+	local cur = self.box.CursorPosition
+	if cur < 1 then
+		cur = #text + 1
+	end
+	self._setting = true
+	self.box.Text = string.sub(text, 1, cur - 1) .. str .. string.sub(text, cur)
+	self.box.CursorPosition = cur + #str
+	self._setting = false
+	local buf = self.buffers[self.active]
+	if buf then
+		buf.source = self.box.Text
+		buf.dirty = true
+	end
+	self:refreshGutter()
 end
 
 function Kaveat:runCmd(text: string)

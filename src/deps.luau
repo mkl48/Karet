@@ -53,4 +53,9 @@ function deps.Highlighter(): any?
 	return resolve("Highlighter")
 end
 
+-- Lucide - latte-softs lucide icon set, for the editor autocomplete icons. vendored.
+function deps.Lucide(): any?
+	return resolve("Lucide")
+end
+
 return deps
