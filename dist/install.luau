@@ -492,7 +492,86 @@ end
 
 return Cache
 ]])
-local _3 = mod("Commands", _1, [[
+local _3 = mod("Capture", _1, [[
+-- stops the game from eating our keys while the terminal/editor is open. disabling the
+-- movement controls kills the char moving on arrows/wasd, and sinking shift via CAS stops
+-- shift lock when you press : (shift+;). text input + the textbox cursor are untouched.
+-- ref counted so it only re enables once everything is closed.
+
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local Capture = {}
+
+local active: { [string]: boolean } = {}
+local count = 0
+local controls: any = nil
+
+local function getControls()
+	local player = Players.LocalPlayer
+	local ps = player and player:FindFirstChild("PlayerScripts")
+	local pm = ps and ps:FindFirstChild("PlayerModule")
+	if not pm then
+		return nil
+	end
+	local ok, mod = pcall(require, pm)
+	if not ok then
+		return nil
+	end
+	local ok2, c = pcall(function()
+		return mod:GetControls()
+	end)
+	return ok2 and c or nil
+end
+
+local function enable()
+	controls = controls or getControls()
+	if controls then
+		pcall(function()
+			controls:Disable()
+		end)
+	end
+	ContextActionService:BindActionAtPriority("KaretCapture", function()
+		return Enum.ContextActionResult.Sink
+	end, false, 9000, Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift)
+end
+
+local function disable()
+	if controls then
+		pcall(function()
+			controls:Enable()
+		end)
+	end
+	ContextActionService:UnbindAction("KaretCapture")
+end
+
+function Capture.acquire(id: string)
+	if not RunService:IsClient() or active[id] then
+		return
+	end
+	active[id] = true
+	count += 1
+	if count == 1 then
+		enable()
+	end
+end
+
+function Capture.release(id: string)
+	if not active[id] then
+		return
+	end
+	active[id] = nil
+	count -= 1
+	if count <= 0 then
+		count = 0
+		disable()
+	end
+end
+
+return Capture
+]])
+local _4 = mod("Commands", _1, [[
 -- Karet's built-in commands. Returns command definitions parameterised by a small
 -- `services` table, so the commands stay decoupled from the umbrella (and are testable
 -- headlessly by passing stubs). Karet.Start registers these unless BuiltIns = false.
@@ -692,7 +771,7 @@ end
 
 return Commands
 ]])
-local _4 = mod("Complete", _1, [[
+local _5 = mod("Complete", _1, [[
 -- works out what to suggest for the current line, plus the signature of the command
 -- youre typing and whether a word is a real command (for colouring). give it the
 -- registry + types, get back { suggest, signature, isCommand }.
@@ -816,7 +895,7 @@ end
 
 return Complete
 ]])
-local _5 = mod("Context", _1, [[
+local _6 = mod("Context", _1, [[
 -- Builds the `ctx` object passed to every command handler (DESIGN → ctx reference).
 --
 -- Context.new(opts) returns (ctx, control): `ctx` is the handler-facing surface; `control`
@@ -967,7 +1046,7 @@ end
 
 return Context
 ]])
-local _6 = mod("Highlighter", _1, [=[
+local _7 = mod("Highlighter", _1, [=[
 local types = require(script.types)
 local utility = require(script.utility)
 local theme = require(script.theme)
@@ -1336,7 +1415,7 @@ end
 
 return Highlighter
 ]=])
-local _7 = mod("lexer", _6, [==[
+local _8 = mod("lexer", _7, [==[
 --[=[
 	Lexical scanner for creating a sequence of tokens from Lua source code.
 	This is a heavily modified and Roblox-optimized version of
@@ -1724,7 +1803,7 @@ end
 
 return lexer
 ]==])
-mod("language", _7, [[
+mod("language", _8, [[
 local language = {
 	keyword = {
 		["and"] = "keyword",
@@ -2282,7 +2361,7 @@ end
 
 return language
 ]])
-mod("theme", _6, [[
+mod("theme", _7, [[
 local DEFAULT_TOKEN_COLORS = {
 	["background"] = Color3.fromRGB(47, 47, 47),
 	["iden"] = Color3.fromRGB(234, 234, 234),
@@ -2354,7 +2433,7 @@ Theme.setColors(DEFAULT_TOKEN_COLORS)
 
 return Theme
 ]])
-mod("types", _6, [[
+mod("types", _7, [[
 export type TextObject = TextLabel | TextBox
 
 export type TokenName =
@@ -2410,7 +2489,7 @@ export type ObjectData = {
 
 return nil
 ]])
-mod("utility", _6, [[
+mod("utility", _7, [[
 local types = require(script.Parent.types)
 
 local Utility = {}
@@ -2763,7 +2842,7 @@ end
 
 return Host
 ]])
-local _8 = mod("Iris", _1, [==[
+local _9 = mod("Iris", _1, [==[
 --!optimize 2
 local Types = require(script.Types)
 
@@ -3461,7 +3540,7 @@ require(script.API)(Iris)
 
 return Iris
 ]==])
-mod("API", _8, [==[
+mod("API", _9, [==[
 local Types = require(script.Parent.Types)
 
 return function(Iris: Types.Iris)
@@ -5548,7 +5627,7 @@ return function(Iris: Types.Iris)
     end
 end
 ]==])
-mod("Internal", _8, [==[
+mod("Internal", _9, [==[
 local Types = require(script.Parent.Types)
 
 return function(Iris: Types.Iris): Types.Internal
@@ -6445,7 +6524,7 @@ return function(Iris: Types.Iris): Types.Internal
     return Internal
 end
 ]==])
-mod("PubTypes", _8, [[
+mod("PubTypes", _9, [[
 local Types = require(script.Parent.Types)
 
 export type ID = Types.ID
@@ -6490,7 +6569,7 @@ export type Iris = Types.Iris
 
 return {}
 ]])
-mod("Types", _8, [=[
+mod("Types", _9, [=[
 local WidgetTypes = require(script.Parent.WidgetTypes)
 
 export type ID = WidgetTypes.ID
@@ -7152,7 +7231,7 @@ export type Iris = {
 
 return {}
 ]=])
-mod("WidgetTypes", _8, [[
+mod("WidgetTypes", _9, [[
 --[=[
     @within Iris
     @type ID string
@@ -7675,7 +7754,7 @@ export type Table = ParentWidget & {
 
 return {}
 ]])
-mod("config", _8, [[
+mod("config", _9, [[
 local TemplateConfig = {
     colorDark = { -- Dear, ImGui default dark
         TextColor = Color3.fromRGB(255, 255, 255),
@@ -7982,7 +8061,7 @@ local TemplateConfig = {
 
 return TemplateConfig
 ]])
-mod("demoWindow", _8, [=[
+mod("demoWindow", _9, [=[
 local Types = require(script.Parent.Types)
 
 return function(Iris: Types.Iris)
@@ -9943,7 +10022,7 @@ return function(Iris: Types.Iris)
     end
 end
 ]=])
-local _9 = mod("widgets", _8, [[
+local _10 = mod("widgets", _9, [[
 local Types = require(script.Parent.Types)
 
 local widgets = {} :: Types.WidgetUtility
@@ -10392,7 +10471,7 @@ return function(Iris: Types.Internal)
     require(script.Table)(Iris, widgets)
 end
 ]])
-mod("Button", _9, [[
+mod("Button", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -10484,7 +10563,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     )
 end
 ]])
-mod("Checkbox", _9, [[
+mod("Checkbox", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -10601,7 +10680,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Combo", _9, [[
+mod("Combo", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -11095,7 +11174,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Format", _9, [[
+mod("Format", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -11237,7 +11316,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Image", _9, [[
+mod("Image", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -11394,7 +11473,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     )
 end
 ]])
-mod("Input", _9, [=[
+mod("Input", _10, [=[
 local Types = require(script.Parent.Parent.Types)
 
 type InputDataTypes = "Num" | "Vector2" | "Vector3" | "UDim" | "UDim2" | "Color3" | "Color4" | "Rect" | "Enum" | "" | string
@@ -12628,7 +12707,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]=])
-mod("Menu", _9, [[
+mod("Menu", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -13229,7 +13308,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Plot", _9, [[
+mod("Plot", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -13870,7 +13949,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("RadioButton", _9, [[
+mod("RadioButton", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -13998,7 +14077,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Root", _9, [[
+mod("Root", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -14143,7 +14222,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Tab", _9, [[
+mod("Tab", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -14478,7 +14557,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Table", _9, [=[
+mod("Table", _10, [=[
 local Types = require(script.Parent.Parent.Types)
 
 -- Tables need an overhaul.
@@ -15112,7 +15191,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]=])
-mod("Text", _9, [[
+mod("Text", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -15246,7 +15325,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Tree", _9, [[
+mod("Tree", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -15535,7 +15614,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     )
 end
 ]])
-mod("Window", _9, [[
+mod("Window", _10, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -16612,7 +16691,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-local _10 = mod("Kaveat", _1, [[
+local _11 = mod("Kaveat", _1, [[
 -- Kaveat, the script editor. custom ui, feels like neovim: a topbar, a kavs file tree,
 -- tabs, the editor, an output pane and a modeline, all resizable, plus a draggable window.
 -- two modes like nvim: READ and WRITE. click or press i to write, esc to read. : opens a
@@ -16624,7 +16703,9 @@ local UserInputService = game:GetService("UserInputService")
 
 local Theme = require(script.Parent.Theme)
 local deps = require(script.Parent.deps)
+local Capture = require(script.Parent.Capture)
 local create = require(script.Parent.Terminal.create)
+local LuauComplete = require(script.Complete)
 
 local Kaveat = {}
 Kaveat.__index = Kaveat
@@ -16676,6 +16757,8 @@ function Kaveat.new(opts: { [string]: any }?)
 	self.cmdSuggestions = {}
 	self.cmdSel = 0
 	self.cmdSugLabels = {}
+	self.acSuggestions = {}
+	self.acLabels = {}
 
 	self:build(options)
 
@@ -16808,12 +16891,36 @@ function Kaveat:build(options)
 		TextYAlignment = Enum.TextYAlignment.Top,
 		ClipsDescendants = true,
 	})
+	-- the luau autocomplete popup, follows the cursor line roughly
+	local acStroke = create("UIStroke", { Thickness = 1 })
+	local acFrame = create("Frame", {
+		Name = "AutoComplete",
+		Visible = false,
+		Position = UDim2.new(0, 50, 0, 0),
+		Size = UDim2.fromOffset(260, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BorderSizePixel = 0,
+		ZIndex = 9,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			acStroke,
+			create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }),
+			create("UIPadding", {
+				PaddingTop = UDim.new(0, 4),
+				PaddingBottom = UDim.new(0, 4),
+				PaddingLeft = UDim.new(0, 6),
+				PaddingRight = UDim.new(0, 6),
+			}),
+		},
+	})
+	self.acFrame, self.acStroke = acFrame, acStroke
+
 	local editor = create("Frame", {
 		Name = "EditorArea",
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 1, -(TAB_H + self.outH)),
 		Position = UDim2.new(0, 0, 0, TAB_H),
-		Children = { gutter, box },
+		Children = { gutter, box, acFrame },
 	})
 
 	local outDrag = create("TextButton", {
@@ -16982,12 +17089,12 @@ function Kaveat:build(options)
 	self.modeChip, self.ctxLabel, self.fileLabel, self.title = modeChip, ctxLabel, fileLabel, title
 	self.cmdline, self.cmdBox, self.treeDrag, self.outDrag = cmdline, cmdBox, treeDrag, outDrag
 
-	self.themed.bg = { window, tree, tabBar, output, cmdSug }
+	self.themed.bg = { window, tree, tabBar, output, cmdSug, acFrame }
 	self.themed.surface = { topbar, modeline, cmdline }
 	self.themed.fg = { box }
 	self.themed.muted = { gutter, treeTitle, ctxLabel, fileLabel }
 	self.themed.accent = { title }
-	self.themed.border = { stroke, treeDrag, outDrag, cmdStroke }
+	self.themed.border = { stroke, treeDrag, outDrag, cmdStroke, acStroke }
 
 	box.Focused:Connect(function()
 		self.mode = "WRITE"
@@ -17007,6 +17114,31 @@ function Kaveat:build(options)
 			end
 		end
 		self:refreshGutter()
+		if self._setting then
+			return
+		end
+		-- tab: accept the top suggestion if the popup is open, else indent
+		if string.find(box.Text, "\t") then
+			if #self.acSuggestions > 0 then
+				local insert = self.acSuggestions[1].insert
+				self._setting = true
+				box.Text = string.gsub(box.Text, "([%w_]*)\t", insert, 1)
+				self._setting = false
+				if buf then
+					buf.source = box.Text
+				end
+				self:hideAc()
+			else
+				self._setting = true
+				box.Text = string.gsub(box.Text, "\t", "    ")
+				self._setting = false
+				if buf then
+					buf.source = box.Text
+				end
+			end
+			return
+		end
+		self:editorComplete()
 	end)
 
 	exit.MouseButton1Click:Connect(function()
@@ -17201,6 +17333,62 @@ function Kaveat:hideCmdSug()
 	self.cmdSuggestions = {}
 	self.cmdSel = 0
 	self:renderCmdSug()
+end
+
+-- editor (luau) autocomplete -----------------------------------------------
+
+function Kaveat:editorComplete()
+	if self.mode ~= "WRITE" then
+		self:hideAc()
+		return
+	end
+	self.acSuggestions = LuauComplete.complete(self.box.Text, self.box.CursorPosition)
+	local before = string.sub(self.box.Text, 1, math.max(0, self.box.CursorPosition - 1))
+	local line = select(2, string.gsub(before, "\n", "\n"))
+	self.acFrame.Position = UDim2.new(0, 50, 0, (line + 1) * (SIZE + 2))
+	self:renderAc()
+end
+
+function Kaveat:renderAc()
+	for _, l in self.acLabels do
+		l:Destroy()
+	end
+	table.clear(self.acLabels)
+	local show = self.mode == "WRITE" and #self.acSuggestions > 0
+	self.acFrame.Visible = show
+	if not show then
+		return
+	end
+	local p = self.palette
+	local fg = (p and p.Foreground) or Color3.new(1, 1, 1)
+	local muted = (p and p.Muted) or Color3.fromRGB(120, 120, 120)
+	local sel = (p and p.Selection) or Color3.fromRGB(60, 60, 80)
+	for i, s in self.acSuggestions do
+		if i > 8 then
+			break
+		end
+		local label = create("TextLabel", {
+			Name = "Ac",
+			BackgroundColor3 = sel,
+			BackgroundTransparency = i == 1 and 0 or 1, -- top one is highlighted, tab takes it
+			Size = UDim2.new(1, 0, 0, 18),
+			Font = FONT,
+			TextSize = 13,
+			RichText = true,
+			Text = `{s.text}  <font color="{rgb(muted)}" size="11">{s.detail}</font>`,
+			TextColor3 = fg,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = i,
+			ZIndex = 10,
+			Parent = self.acFrame,
+		})
+		table.insert(self.acLabels, label)
+	end
+end
+
+function Kaveat:hideAc()
+	self.acSuggestions = {}
+	self:renderAc()
 end
 
 function Kaveat:runCmd(text: string)
@@ -17531,6 +17719,7 @@ end
 function Kaveat:open()
 	self.isOpen = true
 	self.window.Visible = true
+	Capture.acquire("kaveat")
 	self:refreshTree()
 	self.mode = "READ"
 	self:refreshMode()
@@ -17540,6 +17729,7 @@ end
 function Kaveat:close()
 	self.isOpen = false
 	self.window.Visible = false
+	Capture.release("kaveat")
 	self.box:ReleaseFocus()
 end
 
@@ -17609,7 +17799,143 @@ end
 
 return Kaveat
 ]])
-local _11 = mod("Networking", _1, [[
+mod("Complete", _11, [[
+-- a practical luau completer for the editor. not a real language server: it offers
+-- roblox globals + a curated api + keywords, and scans your buffer for locals, functions
+-- and class methods (function Class:method / Class.field =) so your own stuff completes.
+-- after a . or : it shows members for known bases, your class methods, else common instance
+-- methods.
+
+local Complete = {}
+
+local GLOBALS = {
+	"game", "workspace", "script", "Enum", "Instance", "task", "math", "string", "table",
+	"os", "wait", "print", "warn", "error", "assert", "pcall", "xpcall", "tick", "typeof",
+	"type", "require", "next", "ipairs", "pairs", "select", "tonumber", "tostring", "unpack",
+	"setmetatable", "getmetatable", "rawget", "rawset", "newproxy", "coroutine", "utf8",
+	"Vector3", "Vector2", "CFrame", "Color3", "UDim2", "UDim", "Ray", "Region3", "TweenInfo",
+	"NumberRange", "NumberSequence", "ColorSequence", "BrickColor", "Rect", "Random",
+}
+
+local KEYWORDS = {
+	"local", "function", "end", "if", "then", "else", "elseif", "for", "in", "do", "while",
+	"repeat", "until", "return", "and", "or", "not", "true", "false", "nil", "break", "continue",
+}
+
+-- members offered right after base. / base:
+local MEMBERS = {
+	game = {
+		"GetService", "Workspace", "Players", "ReplicatedStorage", "ServerScriptService",
+		"ServerStorage", "StarterGui", "Lighting", "SoundService", "Teams", "GetChildren",
+		"FindFirstChild", "WaitForChild", "JobId", "PlaceId",
+	},
+	workspace = { "CurrentCamera", "FindFirstChild", "WaitForChild", "GetChildren", "Raycast", "Gravity" },
+	task = { "wait", "spawn", "defer", "delay", "cancel", "synchronize", "desynchronize" },
+	Instance = { "new", "fromExisting" },
+	Enum = { "KeyCode", "Material", "Font", "UserInputType", "HumanoidStateType", "PartType", "EasingStyle" },
+	math = { "floor", "ceil", "abs", "clamp", "min", "max", "random", "huge", "pi", "round", "sqrt", "sin", "cos" },
+	string = { "format", "sub", "gsub", "match", "find", "split", "len", "lower", "upper", "rep", "byte", "char" },
+	table = { "insert", "remove", "find", "concat", "sort", "clear", "create", "clone", "freeze", "unpack" },
+	os = { "time", "clock", "date", "difftime" },
+}
+
+-- fallback after any : (we cant infer the type, these cover most instances)
+local INSTANCE = {
+	"FindFirstChild", "FindFirstChildOfClass", "FindFirstChildWhichIsA", "FindFirstAncestor",
+	"WaitForChild", "GetChildren", "GetDescendants", "Clone", "Destroy", "IsA", "Clear",
+	"GetAttribute", "SetAttribute", "GetPropertyChangedSignal", "Parent", "Name", "ClassName",
+}
+
+export type Suggestion = { text: string, detail: string, insert: string }
+
+local function scan(source: string)
+	local locals, funcs = {}, {}
+	local classes: { [string]: { string } } = {}
+	for name in string.gmatch(source, "local%s+([%a_][%w_]*)") do
+		table.insert(locals, name)
+	end
+	for name in string.gmatch(source, "function%s+([%a_][%w_]*)%s*%(") do
+		table.insert(funcs, name)
+	end
+	for cls, m in string.gmatch(source, "function%s+([%a_][%w_]*)[:.]([%a_][%w_]*)") do
+		classes[cls] = classes[cls] or {}
+		table.insert(classes[cls], m)
+	end
+	for cls, f in string.gmatch(source, "([%a_][%w_]*)%.([%a_][%w_]*)%s*=") do
+		classes[cls] = classes[cls] or {}
+		table.insert(classes[cls], f)
+	end
+	return locals, funcs, classes
+end
+
+-- complete at a cursor position (1-based, the index where the next char goes)
+function Complete.complete(source: string, pos: number): { Suggestion }
+	local before = string.sub(source, 1, math.max(0, (pos or #source + 1) - 1))
+	local out: { Suggestion } = {}
+	local locals, funcs, classes = scan(source)
+
+	-- member access: base . word  or  base : word
+	local base, sep, word = string.match(before, "([%a_][%w_]*)%s*([:.])%s*([%w_]*)$")
+	if base and sep then
+		local members = {}
+		if MEMBERS[base] then
+			for _, m in MEMBERS[base] do
+				table.insert(members, m)
+			end
+		end
+		if classes[base] then
+			for _, m in classes[base] do
+				table.insert(members, m)
+			end
+		end
+		if #members == 0 then
+			members = INSTANCE
+		end
+		local lower = string.lower(word)
+		local seen = {}
+		for _, m in members do
+			if not seen[m] and string.sub(string.lower(m), 1, #lower) == lower then
+				seen[m] = true
+				table.insert(out, { text = m, detail = sep == ":" and "method" or "member", insert = m })
+			end
+		end
+		return out
+	end
+
+	-- plain identifier
+	local typed = string.match(before, "([%a_][%w_]*)$")
+	if not typed then
+		return out
+	end
+	local lower = string.lower(typed)
+	local seen = { [typed] = true }
+	local function add(name: string, detail: string)
+		if not seen[name] and string.sub(string.lower(name), 1, #lower) == lower then
+			seen[name] = true
+			table.insert(out, { text = name, detail = detail, insert = name })
+		end
+	end
+	for _, g in GLOBALS do
+		add(g, "global")
+	end
+	for _, s in locals do
+		add(s, "local")
+	end
+	for _, s in funcs do
+		add(s, "function")
+	end
+	for cls in classes do
+		add(cls, "class")
+	end
+	for _, k in KEYWORDS do
+		add(k, "keyword")
+	end
+	return out
+end
+
+return Complete
+]])
+local _12 = mod("Networking", _1, [[
 -- The client/server transport for Karet commands, over Substance.
 --
 -- Only Server and Context commands cross the boundary; Shared/Client run entirely on the
@@ -17719,7 +18045,7 @@ end
 
 return Networking
 ]])
-local _12 = mod("Profile", _1, [[
+local _13 = mod("Profile", _1, [[
 -- a profile holds the per user stuff, history, the theme they picked, saved kav scripts
 -- and any custom commands. its just in memory for now, can hook it to a datastore later
 
@@ -17746,7 +18072,7 @@ end
 
 return Profile
 ]])
-local _13 = mod("Query", _1, [[
+local _14 = mod("Query", _1, [[
 -- A named-query registry. Karet (and your game) registers providers - "players", "teams",
 -- "commands", whatever - and commands run them by name through ctx.Query. This gives
 -- commands a uniform way to look things up without each one re-implementing resolution.
@@ -17798,7 +18124,7 @@ end
 
 return Query
 ]])
-local _14 = mod("Registry", _1, [[
+local _15 = mod("Registry", _1, [[
 -- The command registry. Holds command definitions, resolves names + aliases
 -- (case-insensitively), and offers the fluent builder (sugar over the table form).
 --
@@ -17963,7 +18289,7 @@ end
 
 return Registry
 ]])
-local _15 = mod("Shell", _1, [[
+local _16 = mod("Shell", _1, [[
 -- The Karet shell: the tokenizer + parser + evaluator that turn a line of input into an
 -- executed chain. This is the power-user surface; the umbrella `Karet` re-exports the
 -- common entry points (Karet.Tokenize / Parse / Analyze / ...) flat.
@@ -18013,7 +18339,7 @@ end
 
 return Shell
 ]])
-mod("Ast", _15, [[
+mod("Ast", _16, [[
 -- AST node kinds for the Karet shell. The parser builds plain tables tagged with a
 -- `kind` from Ast.Kind; the evaluator dispatches on it. See GRAMMAR.md §3.
 
@@ -18043,7 +18369,7 @@ Ast.Kind = {
 
 return Ast
 ]])
-mod("Evaluator", _15, [[
+mod("Evaluator", _16, [[
 -- The Karet shell evaluator: walk an AST, run chains/guards, drive the return pool and
 -- session variables, and evaluate expressions/type-guards.
 --
@@ -18461,7 +18787,7 @@ end
 
 return Evaluator
 ]])
-mod("Lexer", _15, [[
+mod("Lexer", _16, [[
 -- The Karet shell lexer: source text -> a flat list of neutral tokens.
 --
 -- Neutral means: no FLAG / DIRECTIVE / SLASH_REF / SLASH_DIV tokens. `-`, `--`, `/`,
@@ -18821,7 +19147,7 @@ end
 
 return Lexer
 ]])
-mod("Parser", _15, [[
+mod("Parser", _16, [[
 -- Recursive-descent parser for the Karet shell. Tokens -> AST + diagnostics.
 --
 -- The parser is where context lives (GRAMMAR.md §1): the same `/` token becomes a
@@ -19388,7 +19714,7 @@ end
 
 return Parser
 ]])
-mod("ReturnPool", _15, [[
+mod("ReturnPool", _16, [[
 -- The return pool (GRAMMAR.md §5). Commands push typed/labelled return records; `/`
 -- references read them back. There is no positional stack - you reference returns by
 -- what they are. Failed links contribute nothing, so the pool only holds real results.
@@ -19499,7 +19825,7 @@ end
 
 return ReturnPool
 ]])
-mod("Token", _15, [[
+mod("Token", _16, [[
 -- Token kinds and the Token shape for the Karet shell lexer.
 --
 -- The lexer is deliberately neutral (see GRAMMAR.md §2): it never decides whether a
@@ -19575,7 +19901,7 @@ export type Token = {
 
 return Token
 ]])
-local _16 = mod("Substance", _1, [[
+local _17 = mod("Substance", _1, [[
 -- Substance
 -- init.lua
 -- Plinko Labs
@@ -19647,7 +19973,7 @@ Substance.Type = Particle.Type
 
 return Substance
 ]])
-local _17 = mod("Async", _16, [[
+local _18 = mod("Async", _17, [[
 -- Substance
 -- Async/init.lua
 -- Plinko Labs
@@ -19660,7 +19986,7 @@ return {
 	Branch = Branch,
 }
 ]])
-mod("Branch", _17, [[
+mod("Branch", _18, [[
 -- Substance
 -- Async/Branch.lua
 -- Plinko Labs
@@ -19687,7 +20013,7 @@ end
 
 return Branch
 ]])
-mod("Promise", _17, [==[
+mod("Promise", _18, [==[
 --[[
 	An implementation of Promises similar to Promise/A+.
 ]]
@@ -21670,7 +21996,7 @@ function Promise.onUnhandledRejection(callback)
 end
 
 return Promise]==])
-mod("Reaction", _17, [[
+mod("Reaction", _18, [[
 -- Substance
 -- Async/Reaction.lua
 -- Plinko Labs
@@ -21817,7 +22143,7 @@ end
 
 return Reaction
 ]])
-local _18 = mod("Particle", _16, [[
+local _19 = mod("Particle", _17, [[
 -- Substance
 -- Particle/init.lua
 -- Plinko Labs
@@ -21858,7 +22184,7 @@ end
 
 return Particle
 ]])
-mod("Atom", _18, [[
+mod("Atom", _19, [[
 -- Substance
 -- Particle/Atom.lua
 -- Plinko Labs
@@ -21929,7 +22255,7 @@ end
 
 return Atom
 ]])
-mod("Dispatch", _18, [[
+mod("Dispatch", _19, [[
 -- Substance
 -- Particle/Dispatch.lua
 -- Plinko Labs
@@ -22136,7 +22462,7 @@ end
 
 return Dispatch
 ]])
-mod("Fossil", _18, [[
+mod("Fossil", _19, [[
 -- Substance
 -- Particle/Fossil.lua
 -- Plinko Labs
@@ -22187,7 +22513,7 @@ end
 
 return Fossil
 ]])
-mod("Hooks", _18, [[
+mod("Hooks", _19, [[
 -- Substance
 -- Particle/Hooks.lua
 -- Plinko Labs
@@ -22241,7 +22567,7 @@ end
 
 return Hooks
 ]])
-mod("Molecule", _18, [[
+mod("Molecule", _19, [[
 -- Substance
 -- Particle/Molecule.lua
 -- Plinko Labs
@@ -22296,7 +22622,7 @@ end
 
 return Molecule
 ]])
-mod("Registry", _18, [[
+mod("Registry", _19, [[
 -- Substance
 -- Particle/Registry.lua
 -- Plinko Labs
@@ -22343,7 +22669,7 @@ end
 
 return Registry
 ]])
-mod("Remotes", _18, [[
+mod("Remotes", _19, [[
 -- Substance
 -- Particle/Remotes.lua
 -- Plinko Labs
@@ -22401,7 +22727,7 @@ end
 
 return Remotes
 ]])
-mod("Schema", _18, [[
+mod("Schema", _19, [[
 -- Substance
 -- Particle/Schema.lua
 -- Plinko Labs
@@ -22488,14 +22814,14 @@ end
 
 return Schema
 ]])
-local _19 = mod("Type", _18, [[
+local _20 = mod("Type", _19, [[
 -- Substance
 -- Particle/Type/init.lua
 -- Plinko Labs
 
 return require(script.Constructors)
 ]])
-mod("Constructors", _19, [[
+mod("Constructors", _20, [[
 -- Substance
 -- Particle/Type/Constructors.lua
 -- Plinko Labs
@@ -22664,7 +22990,7 @@ end
 
 return Type
 ]])
-mod("TypeDef", _19, [[
+mod("TypeDef", _20, [[
 -- Substance
 -- Particle/Type/TypeDef.lua
 -- Plinko Labs
@@ -23181,7 +23507,7 @@ end
 
 return TypeDef
 ]])
-mod("Types", _18, [[
+mod("Types", _19, [[
 -- Substance
 -- Particle/Types.lua
 -- Plinko Labs
@@ -23224,7 +23550,7 @@ export type Channel = {
 
 return {}
 ]])
-local _20 = mod("React", _16, [[
+local _21 = mod("React", _17, [[
 -- Substance
 -- React/init.lua
 -- Plinko Labs
@@ -23249,7 +23575,7 @@ end
 
 return React
 ]])
-mod("Entangle", _20, [[
+mod("Entangle", _21, [[
 -- Substance
 -- React/Entangle.lua
 -- Plinko Labs
@@ -23323,7 +23649,7 @@ end
 
 return Entangle
 ]])
-mod("Flux", _20, [[
+mod("Flux", _21, [[
 -- Substance
 -- React/Flux.lua
 -- Plinko Labs
@@ -23429,7 +23755,7 @@ end
 
 return Flux
 ]])
-mod("River", _20, [[
+mod("River", _21, [[
 -- Substance
 -- React/River.lua
 -- Plinko Labs
@@ -23493,7 +23819,7 @@ end
 
 return River
 ]])
-local _21 = mod("Tools", _16, [[
+local _22 = mod("Tools", _17, [[
 -- Substance
 -- Tools/init.lua
 -- Plinko Labs
@@ -23523,7 +23849,7 @@ end
 
 return Tools
 ]])
-mod("Batch", _21, [[
+mod("Batch", _22, [[
 -- Substance
 -- Tools/Batch.lua
 -- Plinko Labs
@@ -23557,7 +23883,7 @@ end
 
 return Batch
 ]])
-mod("Fission", _21, [[
+mod("Fission", _22, [[
 -- Substance
 -- Tools/Fission.lua
 -- Plinko Labs
@@ -23589,7 +23915,7 @@ end
 
 return Fission
 ]])
-mod("Fossil", _21, [[
+mod("Fossil", _22, [[
 -- Substance
 -- Tools/Fossil.lua
 -- Plinko Labs
@@ -23604,7 +23930,7 @@ return {
 	Clear = ParticleFossil.Clear,
 }
 ]])
-mod("Hooks", _21, [[
+mod("Hooks", _22, [[
 -- Substance
 -- Tools/Hooks.lua
 -- Plinko Labs
@@ -23616,7 +23942,7 @@ return {
 	Hook = ParticleHooks.Hook,
 }
 ]])
-mod("LandLine", _21, [[
+mod("LandLine", _22, [[
 -- Substance
 -- Tools/LandLine.lua
 -- Plinko Labs
@@ -23662,7 +23988,7 @@ end
 
 return LandLine
 ]])
-local _22 = mod("Switch", _1, [[
+local _23 = mod("Switch", _1, [[
 local Enums    = require(script.Enums)
 local Platform = require(script.Platform)
 local Context  = require(script.Context)
@@ -23753,7 +24079,7 @@ function Switch.OnContextChanged(cb: ({ string }) -> ()): () -> ()
 end
 
 return Switch]])
-mod("Action", _22, [[
+mod("Action", _23, [[
 -- Switch
 -- Action.lua
 -- Plinko Labs
@@ -24492,7 +24818,7 @@ function Action:Destroy()
 end
 
 return Action]])
-mod("Connection", _22, [[
+mod("Connection", _23, [[
 -- Switch
 -- Connection.lua
 -- Plinko Labs
@@ -24596,7 +24922,7 @@ return {
 	Connection = Connection,
 	Promise    = Promise,
 }]])
-mod("Context", _22, [[
+mod("Context", _23, [[
 -- Switch
 -- Context.lua
 -- Plinko Labs
@@ -24772,7 +25098,7 @@ function Context.OnChanged(cb: (stack: { string }) -> ()): () -> ()
 end
 
 return Context]])
-mod("Enums", _22, [[
+mod("Enums", _23, [[
 -- Switch
 -- Enums.lua
 -- Plinko Labs
@@ -24863,7 +25189,7 @@ Enums.Driver = {
 }
 
 return Enums]])
-mod("Platform", _22, [[
+mod("Platform", _23, [[
 -- Switch
 -- Platform.lua
 -- Plinko Labs
@@ -24938,7 +25264,7 @@ function Platform.OnChanged(cb: (new: Platform, prev: Platform) -> ()): () -> ()
 end
 
 return Platform]])
-mod("Promise", _22, [==[
+mod("Promise", _23, [==[
 --[[
 	An implementation of Promises similar to Promise/A+.
 ]]
@@ -26921,7 +27247,7 @@ function Promise.onUnhandledRejection(callback)
 end
 
 return Promise]==])
-mod("Registry", _22, [[
+mod("Registry", _23, [[
 -- Switch
 -- Registry.lua
 -- Plinko Labs
@@ -27057,7 +27383,7 @@ function Registry.All(): { Types.ActionHandle }
 end
 
 return Registry]])
-mod("Types", _22, [[
+mod("Types", _23, [[
 -- Switch
 -- Types.lua
 -- Plinko Labs
@@ -27152,7 +27478,7 @@ export type ActionHandle = {
 }
 
 return {}]])
-local _23 = mod("Terminal", _1, [[
+local _24 = mod("Terminal", _1, [[
 -- Karet.Terminal - the visible console surface (the Alacritty analogue).
 --
 -- Composes the window chrome, the scrolling Output log, and the Input row, drives them all
@@ -27174,6 +27500,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local Theme = require(script.Parent.Theme)
 local deps = require(script.Parent.deps)
+local Capture = require(script.Parent.Capture)
 local create = require(script.create)
 local Output = require(script.Output)
 local Input = require(script.Input)
@@ -27496,6 +27823,7 @@ function Terminal:open()
 	end
 	self.isOpen = true
 	self.window.Visible = true
+	Capture.acquire("terminal")
 	if self.switch then
 		self.switch.PushContext(OPEN_CONTEXT)
 	end
@@ -27511,6 +27839,7 @@ function Terminal:close()
 	self.input.keepFocus = false
 	self.input:blur()
 	self.window.Visible = false
+	Capture.release("terminal")
 	if self.switch then
 		self.switch.PopContext(OPEN_CONTEXT)
 	end
@@ -27660,7 +27989,7 @@ end
 
 return Terminal
 ]])
-mod("Input", _23, [[
+mod("Input", _24, [[
 -- the input row. a prompt + a real textbox, a coloured overlay behind it (so valid
 -- commands show up green-ish vs normal text), and the autocomplete dropdown with a
 -- signature line telling you which arg youre on.
@@ -28130,7 +28459,7 @@ end
 
 return Input
 ]])
-mod("Output", _23, [[
+mod("Output", _24, [[
 -- The terminal's scrolling output log. Each line is a TextLabel coloured by a semantic
 -- theme group (Output / Error / Warn / Info / Success / Comment for echoes), so a theme
 -- switch recolours the whole backlog. Lines remember their group, which is what lets
@@ -28240,7 +28569,7 @@ end
 
 return Output
 ]])
-mod("create", _23, [[
+mod("create", _24, [[
 -- Tiny declarative Instance builder for the terminal UI.
 --
 -- create("Frame", { Size = ..., Children = { ... }, Parent = ... }) sets every property,
@@ -28271,7 +28600,7 @@ end
 
 return create
 ]])
-local _24 = mod("Theme", _1, [[
+local _25 = mod("Theme", _1, [[
 -- Karet.Theme - one semantic colorscheme, piped through every surface (DESIGN → Theme).
 --
 -- A theme is NOT a set of raw frame colors; it is a set of *semantic highlight groups*
@@ -28707,7 +29036,7 @@ Theme.Set("tokyonight")
 
 return Theme
 ]])
-local _25 = mod("Types", _1, [[
+local _26 = mod("Types", _1, [[
 -- Karet's argument type system. A type knows how to Parse a raw token into a value, and
 -- to Validate that value. `coerce` tries a union of types left-to-right (the first that
 -- parses AND validates wins - GRAMMAR/DESIGN), so handlers never type-check. `satisfies`
@@ -29105,5 +29434,5 @@ end
 return deps
 ]])
 
-print("[Karet] installed 92 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 94 modules under ReplicatedStorage.Karet")
 return true

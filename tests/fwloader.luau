@@ -21,6 +21,7 @@ local FILES = {
 	Cache = "src/Cache/init.luau",
 	Query = "src/Query/init.luau",
 	Complete = "src/Complete/init.luau",
+	KaveatComplete = "src/Kaveat/Complete.luau",
 	deps = "src/deps.luau",
 }
 

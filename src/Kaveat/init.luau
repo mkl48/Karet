@@ -9,7 +9,9 @@ local UserInputService = game:GetService("UserInputService")
 
 local Theme = require(script.Parent.Theme)
 local deps = require(script.Parent.deps)
+local Capture = require(script.Parent.Capture)
 local create = require(script.Parent.Terminal.create)
+local LuauComplete = require(script.Complete)
 
 local Kaveat = {}
 Kaveat.__index = Kaveat
@@ -61,6 +63,8 @@ function Kaveat.new(opts: { [string]: any }?)
 	self.cmdSuggestions = {}
 	self.cmdSel = 0
 	self.cmdSugLabels = {}
+	self.acSuggestions = {}
+	self.acLabels = {}
 
 	self:build(options)
 
@@ -193,12 +197,36 @@ function Kaveat:build(options)
 		TextYAlignment = Enum.TextYAlignment.Top,
 		ClipsDescendants = true,
 	})
+	-- the luau autocomplete popup, follows the cursor line roughly
+	local acStroke = create("UIStroke", { Thickness = 1 })
+	local acFrame = create("Frame", {
+		Name = "AutoComplete",
+		Visible = false,
+		Position = UDim2.new(0, 50, 0, 0),
+		Size = UDim2.fromOffset(260, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BorderSizePixel = 0,
+		ZIndex = 9,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			acStroke,
+			create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }),
+			create("UIPadding", {
+				PaddingTop = UDim.new(0, 4),
+				PaddingBottom = UDim.new(0, 4),
+				PaddingLeft = UDim.new(0, 6),
+				PaddingRight = UDim.new(0, 6),
+			}),
+		},
+	})
+	self.acFrame, self.acStroke = acFrame, acStroke
+
 	local editor = create("Frame", {
 		Name = "EditorArea",
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 1, -(TAB_H + self.outH)),
 		Position = UDim2.new(0, 0, 0, TAB_H),
-		Children = { gutter, box },
+		Children = { gutter, box, acFrame },
 	})
 
 	local outDrag = create("TextButton", {
@@ -367,12 +395,12 @@ function Kaveat:build(options)
 	self.modeChip, self.ctxLabel, self.fileLabel, self.title = modeChip, ctxLabel, fileLabel, title
 	self.cmdline, self.cmdBox, self.treeDrag, self.outDrag = cmdline, cmdBox, treeDrag, outDrag
 
-	self.themed.bg = { window, tree, tabBar, output, cmdSug }
+	self.themed.bg = { window, tree, tabBar, output, cmdSug, acFrame }
 	self.themed.surface = { topbar, modeline, cmdline }
 	self.themed.fg = { box }
 	self.themed.muted = { gutter, treeTitle, ctxLabel, fileLabel }
 	self.themed.accent = { title }
-	self.themed.border = { stroke, treeDrag, outDrag, cmdStroke }
+	self.themed.border = { stroke, treeDrag, outDrag, cmdStroke, acStroke }
 
 	box.Focused:Connect(function()
 		self.mode = "WRITE"
@@ -392,6 +420,31 @@ function Kaveat:build(options)
 			end
 		end
 		self:refreshGutter()
+		if self._setting then
+			return
+		end
+		-- tab: accept the top suggestion if the popup is open, else indent
+		if string.find(box.Text, "\t") then
+			if #self.acSuggestions > 0 then
+				local insert = self.acSuggestions[1].insert
+				self._setting = true
+				box.Text = string.gsub(box.Text, "([%w_]*)\t", insert, 1)
+				self._setting = false
+				if buf then
+					buf.source = box.Text
+				end
+				self:hideAc()
+			else
+				self._setting = true
+				box.Text = string.gsub(box.Text, "\t", "    ")
+				self._setting = false
+				if buf then
+					buf.source = box.Text
+				end
+			end
+			return
+		end
+		self:editorComplete()
 	end)
 
 	exit.MouseButton1Click:Connect(function()
@@ -586,6 +639,62 @@ function Kaveat:hideCmdSug()
 	self.cmdSuggestions = {}
 	self.cmdSel = 0
 	self:renderCmdSug()
+end
+
+-- editor (luau) autocomplete -----------------------------------------------
+
+function Kaveat:editorComplete()
+	if self.mode ~= "WRITE" then
+		self:hideAc()
+		return
+	end
+	self.acSuggestions = LuauComplete.complete(self.box.Text, self.box.CursorPosition)
+	local before = string.sub(self.box.Text, 1, math.max(0, self.box.CursorPosition - 1))
+	local line = select(2, string.gsub(before, "\n", "\n"))
+	self.acFrame.Position = UDim2.new(0, 50, 0, (line + 1) * (SIZE + 2))
+	self:renderAc()
+end
+
+function Kaveat:renderAc()
+	for _, l in self.acLabels do
+		l:Destroy()
+	end
+	table.clear(self.acLabels)
+	local show = self.mode == "WRITE" and #self.acSuggestions > 0
+	self.acFrame.Visible = show
+	if not show then
+		return
+	end
+	local p = self.palette
+	local fg = (p and p.Foreground) or Color3.new(1, 1, 1)
+	local muted = (p and p.Muted) or Color3.fromRGB(120, 120, 120)
+	local sel = (p and p.Selection) or Color3.fromRGB(60, 60, 80)
+	for i, s in self.acSuggestions do
+		if i > 8 then
+			break
+		end
+		local label = create("TextLabel", {
+			Name = "Ac",
+			BackgroundColor3 = sel,
+			BackgroundTransparency = i == 1 and 0 or 1, -- top one is highlighted, tab takes it
+			Size = UDim2.new(1, 0, 0, 18),
+			Font = FONT,
+			TextSize = 13,
+			RichText = true,
+			Text = `{s.text}  <font color="{rgb(muted)}" size="11">{s.detail}</font>`,
+			TextColor3 = fg,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = i,
+			ZIndex = 10,
+			Parent = self.acFrame,
+		})
+		table.insert(self.acLabels, label)
+	end
+end
+
+function Kaveat:hideAc()
+	self.acSuggestions = {}
+	self:renderAc()
 end
 
 function Kaveat:runCmd(text: string)
@@ -916,6 +1025,7 @@ end
 function Kaveat:open()
 	self.isOpen = true
 	self.window.Visible = true
+	Capture.acquire("kaveat")
 	self:refreshTree()
 	self.mode = "READ"
 	self:refreshMode()
@@ -925,6 +1035,7 @@ end
 function Kaveat:close()
 	self.isOpen = false
 	self.window.Visible = false
+	Capture.release("kaveat")
 	self.box:ReleaseFocus()
 end
 

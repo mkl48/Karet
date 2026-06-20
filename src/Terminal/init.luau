@@ -19,6 +19,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local Theme = require(script.Parent.Theme)
 local deps = require(script.Parent.deps)
+local Capture = require(script.Parent.Capture)
 local create = require(script.create)
 local Output = require(script.Output)
 local Input = require(script.Input)
@@ -341,6 +342,7 @@ function Terminal:open()
 	end
 	self.isOpen = true
 	self.window.Visible = true
+	Capture.acquire("terminal")
 	if self.switch then
 		self.switch.PushContext(OPEN_CONTEXT)
 	end
@@ -356,6 +358,7 @@ function Terminal:close()
 	self.input.keepFocus = false
 	self.input:blur()
 	self.window.Visible = false
+	Capture.release("terminal")
 	if self.switch then
 		self.switch.PopContext(OPEN_CONTEXT)
 	end
