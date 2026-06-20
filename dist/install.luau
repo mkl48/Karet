@@ -16409,6 +16409,19 @@ function Lexer.tokenize(source: string): LexResult
 				addDiag("unterminated string literal", startPos, #text)
 			end
 			push(Kind.String, text, table.concat(buf), startPos)
+		elseif b == 91 and (isDigit(string.byte(source, i + 1)) or string.byte(source, i + 1) == 45) then
+			-- [1,2,3] wraps a coord/value list into one token, brackets stripped. a [ before
+			-- a letter is left as a normal bracket (eg @TYPE[Player])
+			local startPos = i
+			local close = string.find(source, "]", i + 1, true)
+			if close then
+				local inner = string.gsub(string.sub(source, i + 1, close - 1), "%s", "")
+				push(Kind.Ident, inner, inner, startPos)
+				i = close + 1
+			else
+				push(Kind.LBracket, "[", nil, startPos)
+				i += 1
+			end
 		else
 			-- operators / punctuation, longest match first
 			local startPos = i
@@ -25352,6 +25365,10 @@ local TEXT_SIZE = 15
 local PROMPT_TEXT = "›"
 local MAX = 8
 
+-- auto pairing. type an opener, get the closer for free with the caret in the middle
+local PAIRS = { ["("] = ")", ["["] = "]", ["{"] = "}", ['"'] = '"', ["'"] = "'" }
+local CLOSERS = { [")"] = true, ["]"] = true, ["}"] = true, ['"'] = true, ["'"] = true }
+
 local function rgb(c: Color3): string
 	return string.format("rgb(%d,%d,%d)", math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
 end
@@ -25376,6 +25393,7 @@ function Input.new(parent: Instance)
 	self.sugIndex = 0
 	self.sugLabels = {} :: { TextLabel }
 	self._settingText = false
+	self._lastText = ""
 
 	local prompt = create("TextLabel", {
 		Name = "Prompt",
@@ -25486,6 +25504,8 @@ function Input.new(parent: Instance)
 			box.Text = string.gsub(box.Text, "\t", "")
 			self._settingText = false
 		end
+		self:autoPair()
+		self._lastText = box.Text
 		self:updateOverlay()
 		self:refreshDropdown()
 	end)
@@ -25575,6 +25595,31 @@ function Input:markup(text: string): string
 	end
 	flush(string.sub(text, segStart))
 	return table.concat(result)
+end
+
+-- on a single typed char, drop in the closing half or type over an existing closer
+function Input:autoPair()
+	local new = self.box.Text
+	if #new ~= #self._lastText + 1 then
+		return -- only react to one typed char, not paste/delete
+	end
+	local cur = self.box.CursorPosition
+	if cur < 2 then
+		return
+	end
+	local ch = string.sub(new, cur - 1, cur - 1)
+	local nextCh = string.sub(new, cur, cur)
+	if CLOSERS[ch] and nextCh == ch then
+		self._settingText = true
+		self.box.Text = string.sub(new, 1, cur - 1) .. string.sub(new, cur + 1)
+		self.box.CursorPosition = cur
+		self._settingText = false
+	elseif PAIRS[ch] then
+		self._settingText = true
+		self.box.Text = string.sub(new, 1, cur - 1) .. PAIRS[ch] .. string.sub(new, cur)
+		self.box.CursorPosition = cur
+		self._settingText = false
+	end
 end
 
 function Input:updateOverlay()
@@ -25697,6 +25742,7 @@ function Input:acceptSuggestion()
 	self.box.Text = newText
 	self.box.CursorPosition = #newText + 1
 	self._settingText = false
+	self._lastText = newText
 	self:updateOverlay()
 	self:refreshDropdown()
 end

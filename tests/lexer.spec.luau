@@ -126,4 +126,15 @@ return function(t)
 		Assert.eq(Lexer.tokenize("5").tokens[1].kind, "Number", "plain number unchanged")
 		Assert.eq(kinds(Lexer.tokenize("x-2")), { "Ident", "Minus", "Number", "EOF" }, "x-2 still splits")
 	end)
+
+	t.test("[1,2,3] wraps a value list into one token", function()
+		local b = Lexer.tokenize("tp [1,2,3]")
+		Assert.eq(#b.diagnostics, 0, "no diagnostics")
+		Assert.eq(b.tokens[2].kind, "Ident", "bracket group is one ident")
+		Assert.eq(b.tokens[2].value, "1,2,3", "brackets stripped")
+
+		-- spaces inside are fine, brackets before a letter stay a bracket
+		Assert.eq(Lexer.tokenize("[1, 2, 3]").tokens[1].value, "1,2,3", "spaces stripped")
+		Assert.eq(Lexer.tokenize("@TYPE[Player]").tokens[3].kind, "LBracket", "TYPE bracket unchanged")
+	end)
 end
