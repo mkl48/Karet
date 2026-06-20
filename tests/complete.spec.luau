@@ -38,21 +38,21 @@ end
 
 return function(t)
 	t.test("command name prefix", function()
-		local names = set(rig()("ba"))
+		local names = set(rig().suggest("ba"))
 		Assert.truthy(names["ban"], "ban")
 		Assert.truthy(names["bandage"], "bandage")
 	end)
 
 	t.test("no match returns nothing", function()
-		Assert.eq(#rig()("zzz"), 0, "empty")
+		Assert.eq(#rig().suggest("zzz"), 0, "empty")
 	end)
 
 	t.test("arg autocomplete (duration)", function()
-		Assert.truthy(set(rig()("ban "))["30s"], "30s suggested")
+		Assert.truthy(set(rig().suggest("ban "))["30s"], "30s suggested")
 	end)
 
 	t.test("arg autocomplete filtered by prefix", function()
-		local out = rig()("ban 3")
+		local out = rig().suggest("ban 3")
 		Assert.truthy(#out >= 1, "at least one")
 		for _, x in out do
 			Assert.eq(string.sub(x.text, 1, 1), "3", "starts with 3")
@@ -60,17 +60,34 @@ return function(t)
 	end)
 
 	t.test("boolean arg suggests true/false", function()
-		local vals = set(rig()("kick "))
+		local vals = set(rig().suggest("kick "))
 		Assert.truthy(vals["true"] and vals["false"], "true and false")
 	end)
 
 	t.test("flag completion", function()
-		local flags = set(rig()("ban 30s -"))
+		local flags = set(rig().suggest("ban 30s -"))
 		Assert.truthy(flags["-s"], "-s")
 		Assert.truthy(flags["-p"], "-p")
 	end)
 
 	t.test("only the last command in a chain", function()
-		Assert.truthy(set(rig()("kick true && ba"))["ban"], "completes the second command")
+		Assert.truthy(set(rig().suggest("kick true && ba"))["ban"], "completes the second command")
+	end)
+
+	t.test("signature gives the command + args", function()
+		local sig = rig().signature("ban ")
+		Assert.eq(sig.name, "ban", "name")
+		Assert.eq(#sig.args, 1, "one arg")
+		Assert.truthy(sig.args[1].current, "on the first arg after a space")
+		Assert.truthy(string.find(sig.args[1].label, "Duration"), "shows the type")
+	end)
+
+	t.test("signature is nil for an unknown command", function()
+		Assert.eq(rig().signature("zzz"), nil, "nil")
+	end)
+
+	t.test("isCommand", function()
+		Assert.truthy(rig().isCommand("ban"), "ban is real")
+		Assert.falsy(rig().isCommand("nope"), "nope isnt")
 	end)
 end

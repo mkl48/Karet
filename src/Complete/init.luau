@@ -1,10 +1,11 @@
--- figures out what to suggest for the current input line. give it the registry + types
--- and it hands back a suggest(text) func the input box calls on every keystroke.
--- v1 is whitespace based (no full parse yet), works on the last command in the line.
+-- works out what to suggest for the current line, plus the signature of the command
+-- youre typing and whether a word is a real command (for colouring). give it the
+-- registry + types, get back { suggest, signature, isCommand }.
+-- v1 is whitespace based, works on the last command in the line.
 
 local Complete = {}
 
--- grab the bit after the last chain op / newline, thats the command were typing
+-- the bit after the last chain op / newline, thats the command were on
 local function lastSegment(text: string): string
 	local cut = 0
 	for _, pat in { "&&", "||", "&", ";", "\n" } do
@@ -30,9 +31,10 @@ local function tokens(seg: string): { string }
 end
 
 export type Suggestion = { text: string, detail: string, insert: string }
+export type Signature = { name: string, args: { { label: string, current: boolean } } }
 
-function Complete.build(registry: any, types: any): (text: string) -> { Suggestion }
-	return function(text: string): { Suggestion }
+function Complete.build(registry: any, types: any)
+	local function suggest(text: string): { Suggestion }
 		local seg = lastSegment(text)
 		local words = tokens(seg)
 		local trailingSpace = string.match(seg, "%s$") ~= nil
@@ -42,7 +44,6 @@ function Complete.build(registry: any, types: any): (text: string) -> { Suggesti
 			return out
 		end
 
-		-- still on the command word
 		if #words == 1 and not trailingSpace then
 			local prefix = string.lower(words[1])
 			for _, name in registry:list() do
@@ -54,7 +55,6 @@ function Complete.build(registry: any, types: any): (text: string) -> { Suggesti
 			return out
 		end
 
-		-- onto args / flags
 		local def = registry:get(words[1])
 		if not def then
 			return out
@@ -73,7 +73,6 @@ function Complete.build(registry: any, types: any): (text: string) -> { Suggesti
 			return out
 		end
 
-		-- which arg are we on (1 based). flags arent counted properly yet, good enough
 		local argIndex = (#words - 1) + (trailingSpace and 1 or 0)
 		local spec = (def.Args or {})[argIndex]
 		if spec then
@@ -88,6 +87,36 @@ function Complete.build(registry: any, types: any): (text: string) -> { Suggesti
 		end
 		return out
 	end
+
+	-- which command + arg youre on right now, nil if the first word isnt a command
+	local function signature(text: string): Signature?
+		local seg = lastSegment(text)
+		local words = tokens(seg)
+		if #words == 0 then
+			return nil
+		end
+		local def = registry:get(words[1])
+		if not def then
+			return nil
+		end
+		local trailingSpace = string.match(seg, "%s$") ~= nil
+		local argIndex = (#words - 1) + (trailingSpace and 1 or 0)
+		local args = {}
+		for i, spec in def.Args or {} do
+			local req = spec.Required and "" or "?"
+			table.insert(args, {
+				label = `{spec.Name}: {table.concat(spec.Types, "|")}{req}`,
+				current = i == argIndex,
+			})
+		end
+		return { name = def.Name, args = args }
+	end
+
+	local function isCommand(word: string): boolean
+		return registry:get(word) ~= nil
+	end
+
+	return { suggest = suggest, signature = signature, isCommand = isCommand }
 end
 
 return Complete

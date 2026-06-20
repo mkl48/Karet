@@ -1,6 +1,10 @@
--- the input row. a prompt + a real textbox plus the autocomplete dropdown.
--- the box does the typing, switch isnt in this path. up/down do history unless the
--- suggestion list is open, then they move the selection. tab accepts.
+-- the input row. a prompt + a real textbox, a coloured overlay behind it (so valid
+-- commands show up green-ish vs normal text), and the autocomplete dropdown with a
+-- signature line telling you which arg youre on.
+--
+-- the box does the typing but its own text is hidden (transparent), the overlay label
+-- draws the coloured version. switch isnt in this path. up/down do history unless the
+-- dropdown has suggestions, then they move the selection. tab accepts.
 
 local UserInputService = game:GetService("UserInputService")
 
@@ -12,10 +16,14 @@ Input.__index = Input
 local FONT = Enum.Font.Code
 local TEXT_SIZE = 15
 local PROMPT_TEXT = "›"
-local MAX = 8 -- how many suggestions to show at once
+local MAX = 8
 
 local function rgb(c: Color3): string
 	return string.format("rgb(%d,%d,%d)", math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
+end
+
+local function esc(s: string): string
+	return (string.gsub(string.gsub(string.gsub(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"))
 end
 
 function Input.new(parent: Instance)
@@ -28,8 +36,9 @@ function Input.new(parent: Instance)
 	self.palette = nil :: any
 	self.focused = false
 
-	self.suggester = nil :: ((string) -> { any })?
+	self.completer = nil :: any
 	self.suggestions = {} :: { any }
+	self.signature = nil :: any
 	self.sugIndex = 0
 	self.sugLabels = {} :: { TextLabel }
 	self._settingText = false
@@ -45,6 +54,22 @@ function Input.new(parent: Instance)
 		TextYAlignment = Enum.TextYAlignment.Center,
 	}) :: TextLabel
 
+	-- the coloured version, sits under the box
+	local overlay = create("TextLabel", {
+		Name = "Overlay",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -22, 1, 0),
+		Position = UDim2.new(0, 22, 0, 0),
+		Font = FONT,
+		TextSize = TEXT_SIZE,
+		RichText = true,
+		Text = "",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		ClipsDescendants = true,
+		ZIndex = 1,
+	}) :: TextLabel
+
 	local box = create("TextBox", {
 		Name = "Entry",
 		BackgroundTransparency = 1,
@@ -53,12 +78,14 @@ function Input.new(parent: Instance)
 		Font = FONT,
 		TextSize = TEXT_SIZE,
 		Text = "",
-		PlaceholderText = "type a command",
+		PlaceholderText = "",
+		TextTransparency = 1, -- hidden, the overlay draws it. caret still shows
 		ClearTextOnFocus = false,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Center,
 		TextWrapped = false,
 		ClipsDescendants = true,
+		ZIndex = 2,
 	}) :: TextBox
 
 	local row = create("Frame", {
@@ -68,19 +95,19 @@ function Input.new(parent: Instance)
 		Children = {
 			create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
 			prompt,
+			overlay,
 			box,
 		},
 		Parent = parent,
 	})
 
-	-- the dropdown sits just above the input and grows upward
 	local sugStroke = create("UIStroke", { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
 	local sugFrame = create("Frame", {
 		Name = "Suggestions",
 		Visible = false,
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.new(0, 18, 0, -4),
-		Size = UDim2.fromOffset(300, 0),
+		Size = UDim2.fromOffset(320, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BorderSizePixel = 0,
 		ZIndex = 50,
@@ -100,6 +127,7 @@ function Input.new(parent: Instance)
 
 	self.frame = row
 	self.prompt = prompt
+	self.overlay = overlay
 	self.box = box
 	self.sugFrame = sugFrame
 	self.sugStroke = sugStroke
@@ -109,7 +137,7 @@ function Input.new(parent: Instance)
 	end)
 	box.FocusLost:Connect(function(enterPressed)
 		self.focused = false
-		self:hideSuggestions()
+		self:hideDropdown()
 		if enterPressed then
 			self:submit()
 		end
@@ -119,16 +147,15 @@ function Input.new(parent: Instance)
 		if self._settingText then
 			return
 		end
-		-- single line box shouldnt keep tabs, we use tab to accept
 		if string.find(box.Text, "\t") then
 			self._settingText = true
 			box.Text = string.gsub(box.Text, "\t", "")
 			self._settingText = false
 		end
-		self:refreshSuggestions()
+		self:updateOverlay()
+		self:refreshDropdown()
 	end)
 
-	-- read keys here, switch doesnt fire reliably while the box has focus
 	self.inputConn = UserInputService.InputBegan:Connect(function(input)
 		if not self.focused then
 			return
@@ -160,7 +187,8 @@ function Input:submit()
 	self.box.Text = ""
 	self.historyIndex = 0
 	self.draft = ""
-	self:hideSuggestions()
+	self:hideDropdown()
+	self:updateOverlay()
 	if line ~= "" then
 		if self.history[#self.history] ~= line then
 			table.insert(self.history, line)
@@ -169,7 +197,6 @@ function Input:submit()
 			self.submitHandler(line)
 		end
 	end
-	-- keep focus so you can fire commands back to back
 	task.defer(function()
 		if self.box.Parent then
 			self.box:CaptureFocus()
@@ -177,29 +204,79 @@ function Input:submit()
 	end)
 end
 
--- autocomplete -------------------------------------------------------------
+-- command colouring --------------------------------------------------------
 
-function Input:setSuggester(fn: (string) -> { any })
-	self.suggester = fn
+-- colour the leading word of each chain segment if its a real command
+function Input:markup(text: string): string
+	local cmdColor = self.palette and rgb(self.palette.Command) or "rgb(180,200,255)"
+	local isCommand = self.completer and self.completer.isCommand
+	local result = {}
+	local pos, len, segStart = 1, #text, 1
+
+	local function flush(seg: string)
+		local lead, word, rest = string.match(seg, "^(%s*)(%S*)(.*)$")
+		if word and word ~= "" and isCommand and isCommand(word) then
+			table.insert(result, esc(lead) .. `<font color="{cmdColor}">` .. esc(word) .. `</font>` .. esc(rest))
+		else
+			table.insert(result, esc(seg))
+		end
+	end
+
+	while pos <= len do
+		local op
+		for _, o in { "&&", "||", "&", ";" } do
+			if string.sub(text, pos, pos + #o - 1) == o then
+				op = o
+				break
+			end
+		end
+		if op then
+			flush(string.sub(text, segStart, pos - 1))
+			table.insert(result, esc(op))
+			pos += #op
+			segStart = pos
+		else
+			pos += 1
+		end
+	end
+	flush(string.sub(text, segStart))
+	return table.concat(result)
 end
 
-function Input:refreshSuggestions()
-	if self.suggester and self.box.Text ~= "" then
-		self.suggestions = self.suggester(self.box.Text)
+function Input:updateOverlay()
+	if self.box.Text == "" then
+		local muted = self.palette and rgb(self.palette.Muted) or "rgb(120,120,120)"
+		self.overlay.Text = `<font color="{muted}">type a command</font>`
+	else
+		self.overlay.Text = self:markup(self.box.Text)
+	end
+end
+
+-- dropdown -----------------------------------------------------------------
+
+function Input:setCompleter(completer: any)
+	self.completer = completer
+end
+
+function Input:refreshDropdown()
+	if self.completer and self.box.Text ~= "" then
+		self.suggestions = self.completer.suggest(self.box.Text)
+		self.signature = self.completer.signature(self.box.Text)
 	else
 		self.suggestions = {}
+		self.signature = nil
 	end
 	self.sugIndex = #self.suggestions > 0 and 1 or 0
-	self:renderSuggestions()
+	self:renderDropdown()
 end
 
-function Input:renderSuggestions()
+function Input:renderDropdown()
 	for _, l in self.sugLabels do
 		l:Destroy()
 	end
 	table.clear(self.sugLabels)
 
-	local show = #self.suggestions > 0 and self.focused
+	local show = self.focused and (self.signature ~= nil or #self.suggestions > 0)
 	self.sugFrame.Visible = show
 	if not show then
 		return
@@ -207,16 +284,41 @@ function Input:renderSuggestions()
 
 	local p = self.palette
 	local fg = (p and p.Foreground) or Color3.new(1, 1, 1)
+	local muted = (p and p.Muted) or Color3.fromRGB(120, 120, 120)
+	local accent = (p and p.Accent) or Color3.fromRGB(120, 160, 255)
+	local cmd = (p and p.Command) or accent
 	local sel = (p and p.Selection) or Color3.fromRGB(60, 60, 80)
-	local muted = p and p.Muted
+
+	if self.signature then
+		local parts = { `<font color="{rgb(cmd)}">{esc(self.signature.name)}</font>` }
+		for _, a in self.signature.args do
+			local color = a.current and rgb(accent) or rgb(muted)
+			table.insert(parts, `<font color="{color}">&lt;{esc(a.label)}&gt;</font>`)
+		end
+		local header = create("TextLabel", {
+			Name = "Sig",
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 0, 18),
+			Font = FONT,
+			TextSize = 12,
+			RichText = true,
+			Text = table.concat(parts, " "),
+			TextColor3 = muted,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = 0,
+			ZIndex = 51,
+			Parent = self.sugFrame,
+		}) :: TextLabel
+		table.insert(self.sugLabels, header)
+	end
 
 	for i, sug in self.suggestions do
 		if i > MAX then
 			break
 		end
 		local text = sug.text
-		if sug.detail ~= "" and muted then
-			text = `{sug.text}  <font color="{rgb(muted)}" size="11">{sug.detail}</font>`
+		if sug.detail ~= "" then
+			text = `{esc(sug.text)}  <font color="{rgb(muted)}" size="11">{esc(sug.detail)}</font>`
 		end
 		local label = create("TextLabel", {
 			Name = "Sug",
@@ -243,7 +345,7 @@ function Input:moveSel(delta: number)
 		return
 	end
 	self.sugIndex = ((self.sugIndex - 1 + delta) % n) + 1
-	self:renderSuggestions()
+	self:renderDropdown()
 end
 
 function Input:replaceLastToken(text: string, insert: string): string
@@ -261,13 +363,15 @@ function Input:acceptSuggestion()
 	self.box.Text = newText
 	self.box.CursorPosition = #newText + 1
 	self._settingText = false
-	self:refreshSuggestions()
+	self:updateOverlay()
+	self:refreshDropdown()
 end
 
-function Input:hideSuggestions()
+function Input:hideDropdown()
 	self.suggestions = {}
+	self.signature = nil
 	self.sugIndex = 0
-	self:renderSuggestions()
+	self:renderDropdown()
 end
 
 -- history ------------------------------------------------------------------
@@ -311,11 +415,12 @@ end
 function Input:applyTheme(palette: { [string]: Color3 })
 	self.palette = palette
 	self.prompt.TextColor3 = palette.Prompt
-	self.box.TextColor3 = palette.Foreground
-	self.box.PlaceholderColor3 = palette.Muted
+	self.box.TextColor3 = palette.Foreground -- caret colour
+	self.overlay.TextColor3 = palette.Foreground
 	self.sugFrame.BackgroundColor3 = palette.Surface
 	self.sugStroke.Color = palette.Border
-	self:renderSuggestions()
+	self:updateOverlay()
+	self:renderDropdown()
 end
 
 function Input:destroy()

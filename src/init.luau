@@ -230,8 +230,8 @@ local function startClient(options: StartConfig)
 	terminal:mount()
 	-- back the input history with the profile so it sticks around
 	terminal.input.history = Karet.Profile.History
-	-- autocomplete from the registry + types
-	terminal.input:setSuggester(Complete.build(registry, types))
+	-- autocomplete + signature + command colouring from the registry + types
+	terminal.input:setCompleter(Complete.build(registry, types))
 	if options.Toggle then
 		local ok, err = pcall(function()
 			terminal:enableSwitch(options.Toggle)
