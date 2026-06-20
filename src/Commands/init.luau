@@ -48,7 +48,7 @@ end
 
 -- Build the list of built-in command definitions.
 function Commands.build(services: Services): { any }
-	return {
+	local defs = {
 		{
 			Name = "help",
 			Aliases = { "h", "?" },
@@ -221,11 +221,14 @@ function Commands.build(services: Services): { any }
 			Description = "open the @CONFIG editor (theme, placement, prompt...)",
 			Network = "Client",
 			On = { Client = function(ctx)
-				if services.openConfig and services.editor and services.editor() then
-					services.openConfig()
-				else
-					ctx.Err("config editor needs Kaveat (Start{ Kaveat = true })")
+				if not (services.editor and services.editor()) then
+					return ctx.Err("config needs Kaveat - start with Karet.Start{ Kaveat = true }")
 				end
+				if not services.openConfig then
+					return ctx.Err("config editor unavailable")
+				end
+				ctx.Info("opening @CONFIG in kaveat (edit values, then :w to apply)")
+				services.openConfig()
 			end },
 		},
 
@@ -560,6 +563,398 @@ function Commands.build(services: Services): { any }
 			end },
 		},
 	}
+
+	-- ---------------------------------------------------------------------------
+	-- the big batch: ~100 small commands generated from compact tables. each helper
+	-- builds a Client command that prints its result and pushes it to the return pool.
+	-- ---------------------------------------------------------------------------
+
+	local function add(def: any)
+		table.insert(defs, def)
+	end
+
+	local function emit(ctx: any, value: any)
+		ctx.Print(tostring(value))
+		ctx.Return(value)
+	end
+
+	-- one Number arg -> Number
+	local function num1(name: string, desc: string, fn: (number) -> any)
+		add({
+			Name = name,
+			Description = desc,
+			Network = "Client",
+			Args = { { Name = "n", Types = { "Number" }, Required = true } },
+			On = { Client = function(ctx)
+				emit(ctx, fn(ctx.Args.n))
+			end },
+		})
+	end
+
+	-- two Number args -> Number
+	local function num2(name: string, desc: string, fn: (number, number) -> any)
+		add({
+			Name = name,
+			Description = desc,
+			Network = "Client",
+			Args = {
+				{ Name = "a", Types = { "Number" }, Required = true },
+				{ Name = "b", Types = { "Number" }, Required = true },
+			},
+			On = { Client = function(ctx)
+				emit(ctx, fn(ctx.Args.a, ctx.Args.b))
+			end },
+		})
+	end
+
+	-- one String arg -> anything
+	local function str1(name: string, desc: string, fn: (string) -> any)
+		add({
+			Name = name,
+			Description = desc,
+			Network = "Client",
+			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				emit(ctx, fn(ctx.Args.text))
+			end },
+		})
+	end
+
+	-- two String args -> anything
+	local function str2(name: string, desc: string, fn: (string, string) -> any)
+		add({
+			Name = name,
+			Description = desc,
+			Network = "Client",
+			Args = {
+				{ Name = "a", Types = { "String" }, Required = true },
+				{ Name = "b", Types = { "String" }, Required = true },
+			},
+			On = { Client = function(ctx)
+				emit(ctx, fn(ctx.Args.a, ctx.Args.b))
+			end },
+		})
+	end
+
+	-- no args
+	local function plain(name: string, desc: string, fn: (any) -> ())
+		add({ Name = name, Description = desc, Network = "Client", On = { Client = fn } })
+	end
+
+	-- math (one number) --------------------------------------------------------
+	num1("abs", "absolute value", math.abs)
+	num1("ceil", "round up", math.ceil)
+	num1("floor", "round down", math.floor)
+	num1("round", "round to nearest", function(n) return math.round(n) end)
+	num1("sqrt", "square root", math.sqrt)
+	num1("cbrt", "cube root", function(n) return n ^ (1 / 3) end)
+	num1("sign", "sign (-1/0/1)", math.sign)
+	num1("square", "n squared", function(n) return n * n end)
+	num1("cube", "n cubed", function(n) return n * n * n end)
+	num1("sin", "sine (radians)", math.sin)
+	num1("cos", "cosine (radians)", math.cos)
+	num1("tan", "tangent (radians)", math.tan)
+	num1("asin", "arc sine", math.asin)
+	num1("acos", "arc cosine", math.acos)
+	num1("atan", "arc tangent", math.atan)
+	num1("exp", "e^n", math.exp)
+	num1("ln", "natural log", function(n) return math.log(n) end)
+	num1("log2", "log base 2", function(n) return math.log(n, 2) end)
+	num1("log10", "log base 10", function(n) return math.log(n, 10) end)
+	num1("deg", "radians to degrees", math.deg)
+	num1("rad", "degrees to radians", math.rad)
+	num1("recip", "1 / n", function(n) return 1 / n end)
+	num1("double", "n * 2", function(n) return n * 2 end)
+	num1("half", "n / 2", function(n) return n / 2 end)
+	num1("int", "integer part", function(n) return (n < 0) and math.ceil(n) or math.floor(n) end)
+	num1("frac", "fractional part", function(n) return n - ((n < 0) and math.ceil(n) or math.floor(n)) end)
+	num1("factorial", "n! (n<=170)", function(n)
+		local r = 1
+		for i = 2, math.min(170, math.floor(n)) do
+			r *= i
+		end
+		return r
+	end)
+	num1("fib", "nth fibonacci (n<=90)", function(n)
+		local a, b = 0, 1
+		for _ = 1, math.clamp(math.floor(n), 0, 90) do
+			a, b = b, a + b
+		end
+		return a
+	end)
+	num1("isprime", "is n prime?", function(n)
+		n = math.floor(n)
+		if n < 2 then
+			return false
+		end
+		for i = 2, math.floor(math.sqrt(n)) do
+			if n % i == 0 then
+				return false
+			end
+		end
+		return true
+	end)
+	num1("bin", "decimal to binary", function(n)
+		n = math.floor(math.abs(n))
+		if n == 0 then
+			return "0"
+		end
+		local s = ""
+		while n > 0 do
+			s = (n % 2) .. s
+			n //= 2
+		end
+		return s
+	end)
+	num1("hex", "decimal to hex", function(n) return string.format("%x", math.floor(n)) end)
+	num1("oct", "decimal to octal", function(n) return string.format("%o", math.floor(n)) end)
+	num1("char", "code point to char", function(n) return utf8.char(math.floor(n)) end)
+
+	-- math (two numbers) -------------------------------------------------------
+	num2("add", "a + b", function(a, b) return a + b end)
+	num2("sub", "a - b", function(a, b) return a - b end)
+	num2("mul", "a * b", function(a, b) return a * b end)
+	num2("divide", "a / b", function(a, b) return a / b end)
+	num2("mod", "a % b", function(a, b) return a % b end)
+	num2("pow", "a ^ b", function(a, b) return a ^ b end)
+	num2("min", "smaller of a, b", math.min)
+	num2("max", "larger of a, b", math.max)
+	num2("hypot", "sqrt(a^2+b^2)", function(a, b) return math.sqrt(a * a + b * b) end)
+	num2("atan2", "angle of (b, a)", function(a, b) return math.atan2(a, b) end)
+	num2("logbase", "log a base b", function(a, b) return math.log(a, b) end)
+	num2("gcd", "greatest common divisor", function(a, b)
+		a, b = math.floor(math.abs(a)), math.floor(math.abs(b))
+		while b ~= 0 do
+			a, b = b, a % b
+		end
+		return a
+	end)
+	num2("lcm", "least common multiple", function(a, b)
+		local x, y = math.floor(math.abs(a)), math.floor(math.abs(b))
+		if x == 0 or y == 0 then
+			return 0
+		end
+		local g = x
+		local h = y
+		while h ~= 0 do
+			g, h = h, g % h
+		end
+		return x // g * y
+	end)
+	num2("nthroot", "b-th root of a", function(a, b) return a ^ (1 / b) end)
+	num2("percent", "a as % of b", function(a, b) return a / b * 100 end)
+
+	-- strings ------------------------------------------------------------------
+	str1("trim", "strip whitespace", function(s) return (string.gsub(s, "^%s*(.-)%s*$", "%1")) end)
+	str1("ltrim", "strip left whitespace", function(s) return (string.gsub(s, "^%s*", "")) end)
+	str1("rtrim", "strip right whitespace", function(s) return (string.gsub(s, "%s*$", "")) end)
+	str1("capitalize", "capitalize first letter", function(s) return (string.gsub(s, "^%l", string.upper)) end)
+	str1("title", "Title Case", function(s) return (string.gsub(s, "(%a)([%w]*)", function(a, b) return string.upper(a) .. string.lower(b) end)) end)
+	str1("swapcase", "swap letter case", function(s) return (string.gsub(s, "%a", function(c) return c == string.upper(c) and string.lower(c) or string.upper(c) end)) end)
+	str1("rot13", "rot13 cipher", function(s)
+		return (string.gsub(s, "%a", function(c)
+			local base = c:lower() == c and 97 or 65
+			return string.char((c:byte() - base + 13) % 26 + base)
+		end))
+	end)
+	str1("shout", "UPPER + !", function(s) return string.upper(s) .. "!" end)
+	str1("words", "word count", function(s)
+		local n = 0
+		for _ in string.gmatch(s, "%S+") do
+			n += 1
+		end
+		return n
+	end)
+	str1("lines", "line count", function(s) return select(2, string.gsub(s, "\n", "\n")) + 1 end)
+	str1("vowels", "vowel count", function(s) return select(2, string.gsub(string.lower(s), "[aeiou]", "")) end)
+	str1("code", "first char's code point", function(s) return utf8.codepoint(s) end)
+	str1("slug", "url-style slug", function(s) return (string.gsub(string.lower((string.gsub(s, "%s+", "-"))), "[^%w%-]", "")) end)
+	str1("nato", "spell with nato alphabet", function(s)
+		local A = { a = "alpha", b = "bravo", c = "charlie", d = "delta", e = "echo", f = "foxtrot", g = "golf", h = "hotel", i = "india", j = "juliet", k = "kilo", l = "lima", m = "mike", n = "november", o = "oscar", p = "papa", q = "quebec", r = "romeo", s = "sierra", t = "tango", u = "uniform", v = "victor", w = "whiskey", x = "xray", y = "yankee", z = "zulu" }
+		local parts = {}
+		for c in string.gmatch(string.lower(s), "%a") do
+			table.insert(parts, A[c] or c)
+		end
+		return table.concat(parts, " ")
+	end)
+
+	str2("concat", "join two strings", function(a, b) return a .. b end)
+	str2("contains", "does a contain b?", function(a, b) return string.find(a, b, 1, true) ~= nil end)
+	str2("startswith", "does a start with b?", function(a, b) return string.sub(a, 1, #b) == b end)
+	str2("endswith", "does a end with b?", function(a, b) return b == "" or string.sub(a, -#b) == b end)
+	str2("before", "part of a before b", function(a, b)
+		local i = string.find(a, b, 1, true)
+		return i and string.sub(a, 1, i - 1) or a
+	end)
+	str2("after", "part of a after b", function(a, b)
+		local i = string.find(a, b, 1, true)
+		return i and string.sub(a, i + #b) or ""
+	end)
+
+	-- random / fun -------------------------------------------------------------
+	plain("uuid", "a random uuid", function(ctx)
+		local t = string.gsub("xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx", "[xy]", function(c)
+			local v = c == "x" and math.random(0, 15) or math.random(8, 11)
+			return string.format("%x", v)
+		end)
+		emit(ctx, t)
+	end)
+	plain("8ball", "ask the magic 8 ball", function(ctx)
+		local a = { "it is certain", "without a doubt", "yes definitely", "most likely", "ask again later", "cannot predict now", "dont count on it", "my reply is no", "very doubtful", "outlook good" }
+		ctx.Print(a[math.random(#a)])
+	end)
+	plain("fortune", "a random fortune", function(ctx)
+		local a = { "a smooth sea never made a skilled sailor", "the best way out is always through", "ship it", "today is a good day to refactor", "you will fix the bug you wrote yesterday" }
+		ctx.Print(a[math.random(#a)])
+	end)
+	plain("coinstreak", "flip until tails", function(ctx)
+		local n = 0
+		while math.random() < 0.5 do
+			n += 1
+		end
+		ctx.Print(`{n} heads before tails`)
+		ctx.Return(n)
+	end)
+	str1("shuffle", "shuffle a string's characters", function(s)
+		local t = {}
+		for c in string.gmatch(s, ".") do
+			table.insert(t, c)
+		end
+		for i = #t, 2, -1 do
+			local j = math.random(i)
+			t[i], t[j] = t[j], t[i]
+		end
+		return table.concat(t)
+	end)
+	num1("d", "roll a dN die", function(n) return math.random(1, math.max(2, math.floor(n))) end)
+	num1("percentof", "random 0..n percent", function(n) return math.random() * n end)
+
+	-- time ---------------------------------------------------------------------
+	plain("now", "unix timestamp", function(ctx) emit(ctx, os.time()) end)
+	plain("clock", "HH:MM:SS", function(ctx) ctx.Print(os.date("%H:%M:%S")) end)
+	plain("weekday", "day of the week", function(ctx) ctx.Print(os.date("%A")) end)
+	plain("month", "current month", function(ctx) ctx.Print(os.date("%B")) end)
+	plain("year", "current year", function(ctx) emit(ctx, tonumber(os.date("%Y"))) end)
+	plain("isodate", "ISO 8601 date-time", function(ctx) ctx.Print(os.date("!%Y-%m-%dT%H:%M:%SZ")) end)
+	plain("epoch", "seconds since the game started", function(ctx) emit(ctx, math.floor(time())) end)
+
+	-- env helpers --------------------------------------------------------------
+	if services.env then
+		local env = services.env
+		add({
+			Name = "incr",
+			Aliases = { "inc" },
+			Description = "increment a numeric variable",
+			Network = "Client",
+			Args = {
+				{ Name = "name", Types = { "String" }, Required = true },
+				{ Name = "by", Types = { "Number" }, Required = false, Default = 1 },
+			},
+			On = { Client = function(ctx)
+				local v = tonumber(env.get(ctx.Args.name)) or 0
+				v += ctx.Args.by
+				env.set(ctx.Args.name, v)
+				ctx.Success(`@{ctx.Args.name} = {v}`)
+				ctx.Return(v)
+			end },
+		})
+		add({
+			Name = "decr",
+			Aliases = { "dec" },
+			Description = "decrement a numeric variable",
+			Network = "Client",
+			Args = {
+				{ Name = "name", Types = { "String" }, Required = true },
+				{ Name = "by", Types = { "Number" }, Required = false, Default = 1 },
+			},
+			On = { Client = function(ctx)
+				local v = tonumber(env.get(ctx.Args.name)) or 0
+				v -= ctx.Args.by
+				env.set(ctx.Args.name, v)
+				ctx.Success(`@{ctx.Args.name} = {v}`)
+				ctx.Return(v)
+			end },
+		})
+		add({
+			Name = "append",
+			Description = "append text to a variable",
+			Network = "Client",
+			Args = {
+				{ Name = "name", Types = { "String" }, Required = true },
+				{ Name = "text", Types = { "String" }, Required = true },
+			},
+			On = { Client = function(ctx)
+				local v = tostring(env.get(ctx.Args.name) or "") .. ctx.Args.text
+				env.set(ctx.Args.name, v)
+				ctx.Success(`@{ctx.Args.name} = {v}`)
+			end },
+		})
+	end
+
+	-- player / character (local, client side) ----------------------------------
+	local function withChar(ctx: any): any?
+		local plr = services.player and services.player()
+		local char = plr and plr.Character
+		if not char then
+			ctx.Warn("no character")
+			return nil
+		end
+		return char
+	end
+	add({
+		Name = "walkspeed",
+		Aliases = { "ws", "speed" },
+		Description = "set your walk speed",
+		Network = "Client",
+		Args = { { Name = "speed", Types = { "Number" }, Required = true } },
+		On = { Client = function(ctx)
+			local char = withChar(ctx)
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if hum then
+				hum.WalkSpeed = ctx.Args.speed
+				ctx.Success(`walkspeed = {ctx.Args.speed}`)
+			end
+		end },
+	})
+	add({
+		Name = "jumppower",
+		Aliases = { "jp" },
+		Description = "set your jump power",
+		Network = "Client",
+		Args = { { Name = "power", Types = { "Number" }, Required = true } },
+		On = { Client = function(ctx)
+			local char = withChar(ctx)
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if hum then
+				hum.UseJumpPower = true
+				hum.JumpPower = ctx.Args.power
+				ctx.Success(`jumppower = {ctx.Args.power}`)
+			end
+		end },
+	})
+	plain("jump", "make your character jump", function(ctx)
+		local char = withChar(ctx)
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.Jump = true
+		end
+	end)
+	plain("respawn", "respawn your character", function(ctx)
+		local plr = services.player and services.player()
+		if plr then
+			plr:LoadCharacter()
+			ctx.Success("respawned")
+		end
+	end)
+	plain("health", "your current health", function(ctx)
+		local char = withChar(ctx)
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			emit(ctx, math.floor(hum.Health))
+		end
+	end)
+
+	return defs
 end
 
 return Commands

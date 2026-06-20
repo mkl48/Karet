@@ -67,6 +67,8 @@ export type Context = {
 	Warn: (message: any) -> (),
 	Err: (message: any) -> (),
 	Info: (message: any) -> (),
+	Success: (message: any) -> (),
+	Hint: (message: any) -> (),
 	Reply: (message: any) -> (),
 	Return: (...any) -> (),
 	Commit: (payload: any) -> (),
@@ -118,6 +120,14 @@ function Context.new(opts: Options): (any, Control)
 
 	function ctx.Info(message: any)
 		opts.sink("Info", tostring(message))
+	end
+
+	function ctx.Success(message: any)
+		opts.sink("Success", tostring(message))
+	end
+
+	function ctx.Hint(message: any)
+		opts.sink("Hint", tostring(message))
 	end
 
 	-- Reply is Print's semantic twin (a direct answer to the caller).

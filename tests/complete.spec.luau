@@ -90,4 +90,30 @@ return function(t)
 		Assert.truthy(rig().isCommand("ban"), "ban is real")
 		Assert.falsy(rig().isCommand("nope"), "nope isnt")
 	end)
+
+	-- @ intellisense: env vars + @TYPE[...]
+	local function envRig()
+		local r = Registry.new()
+		r:register({ Name = "echo", Network = "Shared", Args = { { Name = "x", Types = { "String" } } }, On = { Shared = noop } })
+		return Complete.build(r, Types.new(), function()
+			return { "greeting", "gold", "hp" }
+		end)
+	end
+
+	t.test("@ suggests env variables by prefix", function()
+		local s = set(envRig().suggest("echo @g"))
+		Assert.truthy(s["@greeting"], "@greeting")
+		Assert.truthy(s["@gold"], "@gold")
+		Assert.falsy(s["@hp"], "@hp filtered out")
+	end)
+
+	t.test("@ at the start of a line suggests vars (not commands)", function()
+		local s = set(envRig().suggest("@h"))
+		Assert.truthy(s["@hp"], "@hp")
+	end)
+
+	t.test("@TYPE[ suggests type names", function()
+		local s = set(envRig().suggest("echo @TYPE[Num"))
+		Assert.truthy(s["Number"], "Number type suggested")
+	end)
 end

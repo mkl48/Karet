@@ -296,6 +296,16 @@ function Types:has(name: string): boolean
 	return self:resolve(name) ~= nil
 end
 
+-- All defined type names, sorted (drives @TYPE[...] autocomplete).
+function Types:names(): { string }
+	local out = {}
+	for name in self.defs do
+		table.insert(out, name)
+	end
+	table.sort(out)
+	return out
+end
+
 -- Coerce a raw value against a union of type names. Returns (typedValue, nil) for the
 -- first type that parses AND validates, or (nil, lastError) if none do.
 function Types:coerce(raw: any, typeNames: { string }): (any, string?)

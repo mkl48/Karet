@@ -33,7 +33,42 @@ end
 export type Suggestion = { text: string, detail: string, insert: string }
 export type Signature = { name: string, args: { { label: string, current: boolean } } }
 
-function Complete.build(registry: any, types: any)
+-- intellisense for @ sigils: @name env vars and @TYPE[...] type values. `active` is the
+-- word being typed (starts with '@'). envList() yields the current variable names.
+local function atSuggestions(active: string, types: any, envList: (() -> { string })?): { Suggestion }
+	local out: { Suggestion } = {}
+
+	-- @TYPE[ ... ] -> suggest type names
+	local typePartial = string.match(active, "^@[Tt][Yy][Pp][Ee]%[(%w*)$")
+	if typePartial ~= nil then
+		local lower = string.lower(typePartial)
+		for _, name in (types and types:names() or {}) do
+			if string.sub(string.lower(name), 1, #lower) == lower then
+				table.insert(out, { text = name, detail = "type", insert = `@TYPE[{name}]` })
+			end
+		end
+		return out
+	end
+
+	local rest = string.sub(active, 2) -- drop the '@'
+	local lower = string.lower(rest)
+
+	-- env variables
+	if envList then
+		for _, name in envList() do
+			if string.sub(string.lower(name), 1, #lower) == lower then
+				table.insert(out, { text = "@" .. name, detail = "var", insert = "@" .. name })
+			end
+		end
+	end
+	-- offer @TYPE[] when it could be what they're starting
+	if string.sub("type", 1, #lower) == lower then
+		table.insert(out, { text = "@TYPE[]", detail = "type guard", insert = "@TYPE[" })
+	end
+	return out
+end
+
+function Complete.build(registry: any, types: any, envList: (() -> { string })?)
 	local function suggest(text: string): { Suggestion }
 		local seg = lastSegment(text)
 		local words = tokens(seg)
@@ -42,6 +77,12 @@ function Complete.build(registry: any, types: any)
 
 		if #words == 0 then
 			return out
+		end
+
+		-- @name / @TYPE[...] intellisense, wherever the active token starts with '@'
+		local active = (not trailingSpace) and words[#words] or ""
+		if string.sub(active, 1, 1) == "@" then
+			return atSuggestions(active, types, envList)
 		end
 
 		if #words == 1 and not trailingSpace then
