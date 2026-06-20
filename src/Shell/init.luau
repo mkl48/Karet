@@ -40,9 +40,10 @@ function Shell.Analyze(source: string)
 end
 
 -- Construct an evaluator bound to a host (registry + type system + runner). Holds the
--- session's return pool and variable scope.
-function Shell.newEvaluator(host: any)
-	return Evaluator.new(host)
+-- session's return pool and variable scope. Pass a shared `scope` table to seed env-var
+-- defaults and keep them across the session.
+function Shell.newEvaluator(host: any, scope: { [string]: any }?)
+	return Evaluator.new(host, scope)
 end
 
 return Shell

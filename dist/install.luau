@@ -143,6 +143,32 @@ Karet.Render = Render
 Karet.Cache = cache
 Karet.Query = query
 
+-- Shell environment variables - the @name store the shell reads/writes. This IS the
+-- evaluator's variable scope (shared), so defaults set here, the `set` command, and
+-- `(x = ...)` assignments all see the same table. Seed defaults before Karet.Start.
+Karet.Env = {} :: { [string]: any }
+
+function Karet.SetVar(name: string, value: any)
+	Karet.Env[name] = value
+end
+
+function Karet.GetVar(name: string): any
+	return Karet.Env[name]
+end
+
+-- a couple handy defaults; users add their own with Karet.SetVar or the `set` command
+Karet.Env.pi = math.pi
+Karet.Env.version = Karet.Version
+
+-- Open the @CONFIG editor (wired up by startClient). The `config` command calls this.
+function Karet.OpenConfig()
+	if Karet._openConfig then
+		Karet._openConfig()
+	else
+		warn("karet: config editor is client + Kaveat only (Start{ Kaveat = true })")
+	end
+end
+
 -- profiles, holds history / theme / saved kav scripts. Karet.Profile is the active one
 local profiles = { default = Profile.new("default") }
 Karet.Profiles = profiles
@@ -303,11 +329,40 @@ local function startClient(options: StartConfig)
 				local p = Players.LocalPlayer
 				return p and p.Name or "client"
 			end,
+			player = function()
+				return Players.LocalPlayer
+			end,
 			editor = function()
 				return Karet.Editor
 			end,
 			closeTerminal = function()
 				terminal:close()
+			end,
+			history = function()
+				return Karet.Profile.History
+			end,
+			-- shell env vars (the @name store) live on Karet.Env, shared with the evaluator
+			env = {
+				get = function(name)
+					return Karet.Env[name]
+				end,
+				set = function(name, value)
+					Karet.Env[name] = value
+				end,
+				unset = function(name)
+					Karet.Env[name] = nil
+				end,
+				list = function()
+					local names = {}
+					for k in Karet.Env do
+						table.insert(names, k)
+					end
+					table.sort(names)
+					return names
+				end,
+			},
+			openConfig = function()
+				Karet.OpenConfig()
 			end,
 			version = Karet.Version,
 		}
@@ -316,12 +371,18 @@ local function startClient(options: StartConfig)
 		end
 	end
 
+	-- Live, editable settings (the @CONFIG editor writes here). Seeded from Start options.
+	local cfg = {
+		promptType = options.PromptType or "text",
+		placement = options.Placement or "Window",
+		toggle = options.Toggle,
+	}
+
 	-- Dangerous-command confirmation. "window" pops a small themed modal; "text" (default)
 	-- asks y/N right on the terminal. Both yield the command's thread until answered.
-	local promptType = options.PromptType or "text"
 	local function confirm(name: string, _def: any): boolean
 		local question = `run dangerous command '{name}'?`
-		if promptType == "window" then
+		if cfg.promptType == "window" then
 			return terminal:promptWindow(question)
 		end
 		return terminal:promptText(question)
@@ -347,7 +408,7 @@ local function startClient(options: StartConfig)
 		ui = terminal:ui(),
 		confirm = confirm,
 	})
-	local evaluator = Shell.newEvaluator(host)
+	local evaluator = Shell.newEvaluator(host, Karet.Env)
 
 	terminal:onSubmit(function(line: string)
 		local parsed = Karet.Parse(line)
@@ -383,15 +444,86 @@ local function startClient(options: StartConfig)
 		editor:setStore(function()
 			return Karet.Profile.Kavs
 		end)
-		-- ctrl+enter / :run ships the script to the server to loadstring
+		-- ctrl+enter / :run ships the script to the server to loadstring. any print/warn the
+		-- script makes is captured server-side and replayed line by line into the kav output.
 		editor:setRunner(function(source, _context)
 			local res = networking:invokeKaveat(source, _context)
+			if type(res.lines) == "table" then
+				for _, l in res.lines do
+					editor:print(tostring(l.text), l.group or "Output")
+				end
+			end
 			if res.ok then
 				return res.output or "ran ok"
 			end
 			error(res.error or "run failed")
 		end)
 		Karet.Editor = editor
+
+		-- @CONFIG editor: a live settings file. it serialises the current settings, and
+		-- saving it (:w) parses key=value back and applies theme/prompt/placement live.
+		local function parseConfig(src: string): { [string]: string }
+			local out: { [string]: string } = {}
+			for line in (src .. "\n"):gmatch("(.-)\n") do
+				line = string.gsub(line, "#.*$", "")
+				local k, v = string.match(line, "^%s*([%w_]+)%s*=%s*(.-)%s*$")
+				if k then
+					out[string.lower(k)] = v
+				end
+			end
+			return out
+		end
+		local function serializeConfig(): string
+			return table.concat({
+				"# karet @CONFIG  -  edit values then :w to apply",
+				"# format:  key = value   (# starts a comment)",
+				"",
+				"theme     = " .. (Karet.Theme.Name() or "tokyonight"),
+				"prompt    = " .. cfg.promptType .. "        # text | window",
+				"placement = " .. cfg.placement .. "        # Window | Top | Bottom",
+				"toggle    = " .. tostring(cfg.toggle or "Semicolon"),
+			}, "\n")
+		end
+		local function applyConfig(src: string): { string }
+			local kv = parseConfig(src)
+			local out = {}
+			if kv.theme and kv.theme ~= "" and kv.theme ~= Karet.Theme.Name() then
+				if pcall(Karet.Theme.Set, kv.theme) then
+					Karet.Profile.CurrentTheme = kv.theme
+					table.insert(out, "theme -> " .. kv.theme)
+				else
+					table.insert(out, "! unknown theme '" .. kv.theme .. "'")
+				end
+			end
+			if kv.prompt == "text" or kv.prompt == "window" then
+				if kv.prompt ~= cfg.promptType then
+					cfg.promptType = kv.prompt
+					table.insert(out, "prompt -> " .. kv.prompt)
+				end
+			elseif kv.prompt then
+				table.insert(out, "! prompt must be text | window")
+			end
+			if kv.placement and kv.placement ~= cfg.placement then
+				if terminal:setPlacement(kv.placement) then
+					cfg.placement = kv.placement
+					table.insert(out, "placement -> " .. kv.placement)
+				else
+					table.insert(out, "! bad placement '" .. kv.placement .. "'")
+				end
+			end
+			if kv.toggle and kv.toggle ~= "" and kv.toggle ~= tostring(cfg.toggle) then
+				cfg.toggle = kv.toggle
+				table.insert(out, "toggle -> " .. kv.toggle .. " (restart to apply)")
+			end
+			if #out == 0 then
+				table.insert(out, "nothing changed")
+			end
+			return out
+		end
+		Karet._openConfig = function()
+			terminal:close()
+			editor:openConfig(serializeConfig(), applyConfig)
+		end
 	end
 
 	Karet.Active = terminal
@@ -447,11 +579,28 @@ local function startServer(options: StartConfig)
 		if not fn then
 			return { ok = false, error = "compile error: " .. tostring(compileErr) }
 		end
+		-- capture the script's print/warn so they replay in the kav output pane. everything
+		-- else (game, workspace, string, ...) falls through to the real environment.
+		local lines = {}
+		local function capture(group: string)
+			return function(...)
+				local parts = {}
+				for i = 1, select("#", ...) do
+					parts[i] = tostring((select(i, ...)))
+				end
+				table.insert(lines, { text = table.concat(parts, "\t"), group = group })
+			end
+		end
+		local okEnv = pcall(function()
+			setfenv(fn, setmetatable({ print = capture("Output"), warn = capture("Warn") }, { __index = getfenv() }))
+		end)
 		local okr, result = pcall(fn)
 		if not okr then
-			return { ok = false, error = tostring(result) }
+			table.insert(lines, { text = tostring(result), group = "Error" })
+			return { ok = false, error = tostring(result), lines = lines }
 		end
-		return { ok = true, output = result ~= nil and tostring(result) or "ran ok" }
+		local _ = okEnv
+		return { ok = true, output = result ~= nil and tostring(result) or "ran ok", lines = lines }
 	end)
 
 	-- OnConnect middleware
@@ -665,10 +814,30 @@ export type Services = {
 	list: () -> { string },
 	get: (name: string) -> any?,
 	playerName: () -> string,
+	player: (() -> any)?,
 	editor: (() -> any)?,
 	closeTerminal: (() -> ())?,
+	history: (() -> { string })?,
+	env: {
+		get: (name: string) -> any,
+		set: (name: string, value: any) -> (),
+		unset: (name: string) -> (),
+		list: () -> { string },
+	}?,
+	openConfig: (() -> ())?,
 	version: string,
 }
+
+-- turn a raw `set` value into a typed one: booleans and numbers parse, everything else
+-- stays a string (so `set hp 100` stores a number, `set name bob` stores a string).
+local function coerceValue(s: string): any
+	if s == "true" then
+		return true
+	elseif s == "false" then
+		return false
+	end
+	return tonumber(s) or s
+end
 
 -- Build the list of built-in command definitions.
 function Commands.build(services: Services): { any }
@@ -837,71 +1006,350 @@ function Commands.build(services: Services): { any }
 			end },
 		},
 
+		-- ----- config -----
+
 		{
-			Name = "demo",
-			Description = "show off the terminal indicators (progress + spinner)",
+			Name = "config",
+			Aliases = { "cfg", "settings" },
+			Description = "open the @CONFIG editor (theme, placement, prompt...)",
 			Network = "Client",
 			On = { Client = function(ctx)
-				local bar = ctx.Indicator({ type = "progress", label = "downloading", total = 100, eta = true })
-				for i = 0, 100, 4 do
-					bar:Set(i)
-					task.wait(0.03)
+				if services.openConfig and services.editor and services.editor() then
+					services.openConfig()
+				else
+					ctx.Err("config editor needs Kaveat (Start{ Kaveat = true })")
 				end
-				bar:Succeed("downloaded")
+			end },
+		},
 
-				local spin = ctx.Indicator({ type = "spinner", label = "compiling" })
-				task.wait(1.2)
-				spin:Succeed("compiled")
+		-- ----- environment variables (@name) -----
+
+		{
+			Name = "set",
+			Description = "set a shell variable: set name value  (read it back as @name)",
+			Network = "Client",
+			Args = {
+				{ Name = "name", Types = { "String" }, Required = true },
+				{ Name = "value", Types = { "String" }, Required = true },
+			},
+			On = { Client = function(ctx)
+				if not services.env then
+					return ctx.Err("env vars unavailable")
+				end
+				services.env.set(ctx.Args.name, coerceValue(ctx.Args.value))
+				ctx.Success(`@{ctx.Args.name} = {ctx.Args.value}`)
 			end },
 		},
 
 		{
-			Name = "ui",
-			Description = "show off the rich terminal output (panels, tables, charts...)",
+			Name = "get",
+			Description = "read a shell variable",
 			Network = "Client",
+			Args = { { Name = "name", Types = { "String" }, Required = true } },
 			On = { Client = function(ctx)
-				local UI = ctx.UI
-				UI.Rule("karet ui")
-				UI.Panel({ "a bordered panel.", "monospaced, themed,", "multi-line." }, { title = "panel" })
-				UI.Table({
-					headers = { "name", "role", "ping" },
-					rows = {
-						{ "alice", "admin", "24ms" },
-						{ "bob", "user", "57ms" },
-						{ "carol", "mod", "31ms" },
-					},
-				})
-				UI.Fields({
-					{ "os", "Roblox" },
-					{ "shell", "karet" },
-					{ "theme", "tokyonight" },
-					{ "uptime", "12m" },
-				})
-				UI.Tree({
-					label = "game",
-					children = {
-						{ label = "Workspace", children = { "Baseplate", "Spawn" } },
-						{ label = "Players", children = { "alice", "bob" } },
-					},
-				})
-				UI.List({
-					{ text = "connected", status = "ok" },
-					{ text = "loaded assets", status = "ok" },
-					{ text = "missing texture", status = "warn" },
-					{ text = "failed to join", status = "fail" },
-				})
-				UI.BarChart({ { "cpu", 82 }, { "mem", 61 }, { "net", 37 } }, { max = 100 })
-				UI.Markup(`fps {UI.Sparkline({ 30, 42, 51, 48, 60, 58, 59, 60 })}  {UI.Badge("60", { color = "Success" })}`)
+				if not services.env then
+					return ctx.Err("env vars unavailable")
+				end
+				local v = services.env.get(ctx.Args.name)
+				if v == nil then
+					ctx.Warn(`@{ctx.Args.name} is unset`)
+				else
+					ctx.Print(`@{ctx.Args.name} = {tostring(v)}`)
+					ctx.Return(v)
+				end
 			end },
 		},
 
 		{
-			Name = "danger",
-			Description = "example dangerous command (asks to confirm first)",
+			Name = "unset",
+			Description = "remove a shell variable",
 			Network = "Client",
-			Dangerous = true,
+			Args = { { Name = "name", Types = { "String" }, Required = true } },
 			On = { Client = function(ctx)
-				ctx.Success("confirmed, boom")
+				if not services.env then
+					return ctx.Err("env vars unavailable")
+				end
+				services.env.unset(ctx.Args.name)
+				ctx.Info(`unset @{ctx.Args.name}`)
+			end },
+		},
+
+		{
+			Name = "vars",
+			Aliases = { "env" },
+			Description = "list shell variables and their values",
+			Network = "Client",
+			On = { Client = function(ctx)
+				if not services.env then
+					return ctx.Err("env vars unavailable")
+				end
+				local names = services.env.list()
+				if #names == 0 then
+					return ctx.Info("no variables set (try: set greeting hello)")
+				end
+				local rows = {}
+				for _, n in names do
+					table.insert(rows, { "@" .. n, tostring(services.env.get(n)) })
+				end
+				ctx.UI.Fields(rows)
+			end },
+		},
+
+		-- ----- info / system -----
+
+		{
+			Name = "history",
+			Aliases = { "hist" },
+			Description = "show recent command history",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local hist = services.history and services.history() or {}
+				local n = #hist
+				if n == 0 then
+					return ctx.Info("no history yet")
+				end
+				for i = math.max(1, n - 19), n do
+					ctx.Print(`{i}  {hist[i]}`)
+				end
+			end },
+		},
+
+		{
+			Name = "neofetch",
+			Aliases = { "fetch", "about" },
+			Description = "system info card, karet style",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local R = ctx.UI.Render
+				local logo = table.concat({
+					" __  __ ",
+					"| |/ /  ",
+					"| ' /   ",
+					"| . \\   ",
+					"|_|\\_\\  ",
+				}, "\n")
+				local fields = R and R.fields({
+					{ "user", services.playerName() },
+					{ "shell", "karet " .. services.version },
+					{ "cmds", tostring(#services.list()) },
+					{ "vars", tostring(services.env and #services.env.list() or 0) },
+					{ "themes", tostring(#services.listThemes()) },
+					{ "uptime", string.format("%ds", math.floor(time())) },
+				})
+				if R then
+					ctx.UI.Markup(R.columns({ R.color(logo, "Accent"), fields }, { gap = 3 }))
+				else
+					ctx.Print("karet " .. services.version)
+				end
+			end },
+		},
+
+		{
+			Name = "players",
+			Aliases = { "who" },
+			Description = "list players in the server",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local names = {}
+				for _, p in game:GetService("Players"):GetPlayers() do
+					table.insert(names, p.Name)
+				end
+				if #names == 0 then
+					return ctx.Info("no players")
+				end
+				ctx.Print(table.concat(names, ", "))
+				ctx.Return(#names)
+			end },
+		},
+
+		{
+			Name = "pos",
+			Aliases = { "position", "where" },
+			Description = "your character's position",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local plr = services.player and services.player()
+				local char = plr and plr.Character
+				local root = char and char:FindFirstChild("HumanoidRootPart")
+				if not root then
+					return ctx.Warn("no character")
+				end
+				local p = root.Position
+				ctx.Print(string.format("%.1f, %.1f, %.1f", p.X, p.Y, p.Z))
+				ctx.Return(p)
+			end },
+		},
+
+		{
+			Name = "uptime",
+			Description = "how long this server has been running",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local s = math.floor(time())
+				ctx.Print(string.format("%dh %dm %ds", s // 3600, (s % 3600) // 60, s % 60))
+			end },
+		},
+
+		{
+			Name = "date",
+			Aliases = { "day" },
+			Description = "current date",
+			Network = "Client",
+			On = { Client = function(ctx)
+				ctx.Print(os.date("%Y-%m-%d %A"))
+			end },
+		},
+
+		-- ----- utility -----
+
+		{
+			Name = "wait",
+			Aliases = { "sleep" },
+			Description = "pause for a duration (30s, 1m, ...)",
+			Network = "Client",
+			Args = { { Name = "duration", Types = { "Duration" }, Required = true } },
+			On = { Client = function(ctx)
+				local secs = ctx.Args.duration
+				local spin = ctx.Indicator({ type = "spinner", label = `waiting {secs}s` })
+				task.wait(secs)
+				spin:Succeed(`waited {secs}s`)
+			end },
+		},
+
+		{
+			Name = "random",
+			Aliases = { "rand" },
+			Description = "a random number: random / random max / random min max",
+			Network = "Client",
+			Args = {
+				{ Name = "a", Types = { "Number" }, Required = false },
+				{ Name = "b", Types = { "Number" }, Required = false },
+			},
+			On = { Client = function(ctx)
+				local a, b = ctx.Args.a, ctx.Args.b
+				local n
+				if a and b then
+					n = math.random(math.floor(a), math.floor(b))
+				elseif a then
+					n = math.random(1, math.floor(a))
+				else
+					n = math.random()
+				end
+				ctx.Print(tostring(n))
+				ctx.Return(n)
+			end },
+		},
+
+		{
+			Name = "roll",
+			Description = "roll a die (default d6)",
+			Network = "Client",
+			Args = { { Name = "sides", Types = { "Integer" }, Required = false, Default = 6 } },
+			On = { Client = function(ctx)
+				local n = math.random(1, math.max(2, ctx.Args.sides))
+				ctx.Print(`rolled {n}`)
+				ctx.Return(n)
+			end },
+		},
+
+		{
+			Name = "flip",
+			Aliases = { "coin" },
+			Description = "flip a coin",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local r = math.random() < 0.5 and "heads" or "tails"
+				ctx.Print(r)
+				ctx.Return(r)
+			end },
+		},
+
+		{
+			Name = "upper",
+			Description = "UPPERCASE a string",
+			Network = "Client",
+			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				local s = string.upper(ctx.Args.text)
+				ctx.Print(s)
+				ctx.Return(s)
+			end },
+		},
+
+		{
+			Name = "lower",
+			Description = "lowercase a string",
+			Network = "Client",
+			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				local s = string.lower(ctx.Args.text)
+				ctx.Print(s)
+				ctx.Return(s)
+			end },
+		},
+
+		{
+			Name = "len",
+			Aliases = { "length" },
+			Description = "length of a string",
+			Network = "Client",
+			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				local n = utf8.len(ctx.Args.text) or #ctx.Args.text
+				ctx.Print(tostring(n))
+				ctx.Return(n)
+			end },
+		},
+
+		{
+			Name = "reverse",
+			Aliases = { "rev" },
+			Description = "reverse a string",
+			Network = "Client",
+			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				local s = string.reverse(ctx.Args.text)
+				ctx.Print(s)
+				ctx.Return(s)
+			end },
+		},
+
+		{
+			Name = "repeat",
+			Aliases = { "rep" },
+			Description = "repeat a string n times",
+			Network = "Client",
+			Args = {
+				{ Name = "text", Types = { "String" }, Required = true },
+				{ Name = "times", Types = { "Integer" }, Required = false, Default = 2 },
+			},
+			On = { Client = function(ctx)
+				local s = string.rep(ctx.Args.text, math.clamp(ctx.Args.times, 1, 100))
+				ctx.Print(s)
+				ctx.Return(s)
+			end },
+		},
+
+		{
+			Name = "count",
+			Description = "count matched players (count all / count me / ...)",
+			Network = "Client",
+			Args = { { Name = "players", Types = { "Players" }, Required = true } },
+			On = { Client = function(ctx)
+				local n = #ctx.Args.players
+				ctx.Print(tostring(n))
+				ctx.Return(n)
+			end },
+		},
+
+		{
+			Name = "notify",
+			Aliases = { "say" },
+			Description = "echo a highlighted message",
+			Network = "Client",
+			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				ctx.Success(ctx.Args.text)
 			end },
 		},
 	}
@@ -17220,7 +17668,7 @@ local ICONS = {
 	class = "whole-word",
 }
 
-export type Buffer = { name: string, context: string, source: string, dirty: boolean }
+export type Buffer = { name: string, context: string, source: string, dirty: boolean, isConfig: boolean? }
 
 function Kaveat.new(opts: { [string]: any }?)
 	local self = setmetatable({}, Kaveat)
@@ -18171,8 +18619,44 @@ function Kaveat:openFile(name: string)
 	self:refreshTree()
 end
 
+-- open the @CONFIG buffer (a live settings file). saving it applies, instead of writing a
+-- kav. `apply(source)` returns a list of summary lines to echo in the output pane.
+function Kaveat:openConfig(text: string, apply: (string) -> { string })
+	self.configApply = apply
+	for i, buf in self.buffers do
+		if buf.isConfig then
+			buf.source = text
+			buf.dirty = false
+			self.active = i
+			self:open()
+			self:showActive()
+			return
+		end
+	end
+	table.insert(self.buffers, { name = "@CONFIG", context = "Client", source = text, dirty = false, isConfig = true })
+	self.active = #self.buffers
+	self:open()
+	self:showActive()
+	self:refreshTabs()
+end
+
 function Kaveat:save()
 	local buf = self.buffers[self.active]
+	-- saving the config buffer applies it rather than writing to the kavs store
+	if buf and buf.isConfig and self.configApply then
+		local ok, res = pcall(self.configApply, buf.source)
+		if ok and type(res) == "table" then
+			for _, line in res do
+				self:print(line, "Success")
+			end
+		else
+			self:print("config error: " .. tostring(res), "Error")
+		end
+		buf.dirty = false
+		self:refreshTitle()
+		self:refreshTabs()
+		return
+	end
 	local kavs = self.store and self.store()
 	if not (buf and kavs) then
 		self:print("nothing to save", "Warn")
@@ -19698,9 +20182,10 @@ function Shell.Analyze(source: string)
 end
 
 -- Construct an evaluator bound to a host (registry + type system + runner). Holds the
--- session's return pool and variable scope.
-function Shell.newEvaluator(host: any)
-	return Evaluator.new(host)
+-- session's return pool and variable scope. Pass a shared `scope` table to seed env-var
+-- defaults and keep them across the session.
+function Shell.newEvaluator(host: any, scope: { [string]: any }?)
+	return Evaluator.new(host, scope)
 end
 
 return Shell
@@ -19781,11 +20266,13 @@ local function inferType(v: any): string
 	return "Value"
 end
 
-function Evaluator.new(host: any)
+-- `scope` is the @name variable store. Pass a shared table to seed defaults / persist env
+-- vars across the session (Karet.Env); omit it for an isolated scope (tests).
+function Evaluator.new(host: any, scope: { [string]: any }?)
 	return setmetatable({
 		host = host,
 		pool = ReturnPool.new(),
-		scope = {}, -- session variables: @name -> value
+		scope = scope or {}, -- session variables: @name -> value
 	}, Evaluator)
 end
 
@@ -20951,12 +21438,15 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 			return nil
 		end
 		advance() -- '('
-		local expr = parseExpr()
+		-- a guard term is a group body: a bare expression `(@x == 4)`, an assignment
+		-- `(x = 2)` (binds, truthy on a non-nil/false value), or a command sub `(isAdmin me)`.
+		-- the evaluator treats all three the same: evaluate, then test truthiness.
+		local body = parseGroupBody()
 		if not at(K.RParen) then
 			return nil
 		end
 		advance() -- ')'
-		return { negate = negate, expr = expr }
+		return { negate = negate, expr = body }
 	end
 
 	function parseGuard(): any?
@@ -29394,6 +29884,7 @@ function Terminal:ui(): { [string]: any }
 		Badge = Render.badge,
 		Color = Render.color,
 		Sparkline = Render.sparkline,
+		Render = Render, -- the whole pure builder module, for composing blocks
 	}
 end
 
@@ -29441,6 +29932,20 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 	end
 	self.input:applyTheme(palette)
 	self:colorPromptModal()
+end
+
+-- Move the window to a named placement live (config editor uses this). Full window only.
+function Terminal:setPlacement(name: string): boolean
+	local set = self.compact and COMPACT_PLACEMENTS or PLACEMENTS
+	local pl = set[name]
+	if not pl then
+		return false
+	end
+	self.placement = pl
+	self.window.AnchorPoint = pl.Anchor
+	self.window.Position = pl.Position
+	self.window.Size = pl.Size
+	return true
 end
 
 -- ---------------------------------------------------------------------------
@@ -31002,9 +31507,13 @@ local BUILTINS: { [string]: Definition } = {
 -- ---------------------------------------------------------------------------
 
 function Types.new()
-	local self = setmetatable({ defs = {} :: { [string]: Definition } }, Types)
+	local self = setmetatable({
+		defs = {} :: { [string]: Definition },
+		lower = {} :: { [string]: Definition }, -- case-insensitive index (so @TYPE[number] works)
+	}, Types)
 	for name, def in BUILTINS do
 		self.defs[name] = def
+		self.lower[string.lower(name)] = def
 	end
 	return self
 end
@@ -31014,14 +31523,20 @@ function Types:Define(name: string, def: Definition)
 	assert(type(name) == "string" and name ~= "", "Karet.DefineType: name must be a non-empty string")
 	assert(type(def.Parse) == "function", `Karet.DefineType('{name}'): a Parse function is required`)
 	self.defs[name] = def
+	self.lower[string.lower(name)] = def
+end
+
+-- Resolve a type by name, exact first then case-insensitively (Number / number / NUMBER).
+function Types:resolve(name: string): Definition?
+	return self.defs[name] or self.lower[string.lower(tostring(name))]
 end
 
 function Types:get(name: string): Definition?
-	return self.defs[name]
+	return self:resolve(name)
 end
 
 function Types:has(name: string): boolean
-	return self.defs[name] ~= nil
+	return self:resolve(name) ~= nil
 end
 
 -- Coerce a raw value against a union of type names. Returns (typedValue, nil) for the
@@ -31029,7 +31544,7 @@ end
 function Types:coerce(raw: any, typeNames: { string }): (any, string?)
 	local lastErr: string? = "no matching type"
 	for _, name in typeNames do
-		local def = self.defs[name]
+		local def = self:resolve(name)
 		if not def then
 			lastErr = `unknown type '{name}'`
 		else
@@ -31052,7 +31567,7 @@ end
 
 -- Does a value satisfy a named type? Drives @TYPE[name] guards.
 function Types:satisfies(value: any, typeName: string): boolean
-	local def = self.defs[typeName]
+	local def = self:resolve(typeName)
 	if not def then
 		return false
 	end
@@ -31065,7 +31580,7 @@ end
 
 -- Autocomplete suggestions for a partial token against a type, or {} if unsupported.
 function Types:autocomplete(typeName: string, raw: string): { string }
-	local def = self.defs[typeName]
+	local def = self:resolve(typeName)
 	if def and def.Autocomplete then
 		return def.Autocomplete(raw)
 	end

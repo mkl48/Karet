@@ -222,6 +222,24 @@ return function(t)
 		Assert.truthy(ok, "indicator calls didn't error")
 	end)
 
+	t.test("guarded block: assignment guard term binds then runs the block", function()
+		local ran = 0
+		local k = rig(function(r)
+			r:register({ Name = "mark", Network = "Shared", On = { Shared = function() ran += 1 end } })
+		end)
+		-- (x = 2) binds @x = 2; @x == @TYPE[number] is type-satisfaction (lowercase ok)
+		k.run('(x = 2) && (@x == @TYPE[number]) { mark }')
+		Assert.eq(ran, 1, "block ran when both guard terms passed")
+		k.run('(y = 2) && (@y == @TYPE[string]) { mark }')
+		Assert.eq(ran, 1, "block skipped when a guard term failed")
+	end)
+
+	t.test("case-insensitive @TYPE names resolve", function()
+		local k = rig(greetCommand)
+		k.run('(n = 5) && (@n == @TYPE[NUMBER]) { greet ok }')
+		Assert.eq(k.out[#k.out] and k.out[#k.out].message, "hi ok", "NUMBER matched the value")
+	end)
+
 	t.test("ctx.UI is a no-op toolkit without a terminal", function()
 		local ok = false
 		local k = rig(function(r)

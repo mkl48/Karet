@@ -435,12 +435,15 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 			return nil
 		end
 		advance() -- '('
-		local expr = parseExpr()
+		-- a guard term is a group body: a bare expression `(@x == 4)`, an assignment
+		-- `(x = 2)` (binds, truthy on a non-nil/false value), or a command sub `(isAdmin me)`.
+		-- the evaluator treats all three the same: evaluate, then test truthiness.
+		local body = parseGroupBody()
 		if not at(K.RParen) then
 			return nil
 		end
 		advance() -- ')'
-		return { negate = negate, expr = expr }
+		return { negate = negate, expr = body }
 	end
 
 	function parseGuard(): any?

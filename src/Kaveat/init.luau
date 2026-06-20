@@ -53,7 +53,7 @@ local ICONS = {
 	class = "whole-word",
 }
 
-export type Buffer = { name: string, context: string, source: string, dirty: boolean }
+export type Buffer = { name: string, context: string, source: string, dirty: boolean, isConfig: boolean? }
 
 function Kaveat.new(opts: { [string]: any }?)
 	local self = setmetatable({}, Kaveat)
@@ -1004,8 +1004,44 @@ function Kaveat:openFile(name: string)
 	self:refreshTree()
 end
 
+-- open the @CONFIG buffer (a live settings file). saving it applies, instead of writing a
+-- kav. `apply(source)` returns a list of summary lines to echo in the output pane.
+function Kaveat:openConfig(text: string, apply: (string) -> { string })
+	self.configApply = apply
+	for i, buf in self.buffers do
+		if buf.isConfig then
+			buf.source = text
+			buf.dirty = false
+			self.active = i
+			self:open()
+			self:showActive()
+			return
+		end
+	end
+	table.insert(self.buffers, { name = "@CONFIG", context = "Client", source = text, dirty = false, isConfig = true })
+	self.active = #self.buffers
+	self:open()
+	self:showActive()
+	self:refreshTabs()
+end
+
 function Kaveat:save()
 	local buf = self.buffers[self.active]
+	-- saving the config buffer applies it rather than writing to the kavs store
+	if buf and buf.isConfig and self.configApply then
+		local ok, res = pcall(self.configApply, buf.source)
+		if ok and type(res) == "table" then
+			for _, line in res do
+				self:print(line, "Success")
+			end
+		else
+			self:print("config error: " .. tostring(res), "Error")
+		end
+		buf.dirty = false
+		self:refreshTitle()
+		self:refreshTabs()
+		return
+	end
 	local kavs = self.store and self.store()
 	if not (buf and kavs) then
 		self:print("nothing to save", "Warn")

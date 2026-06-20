@@ -43,11 +43,13 @@ local function inferType(v: any): string
 	return "Value"
 end
 
-function Evaluator.new(host: any)
+-- `scope` is the @name variable store. Pass a shared table to seed defaults / persist env
+-- vars across the session (Karet.Env); omit it for an isolated scope (tests).
+function Evaluator.new(host: any, scope: { [string]: any }?)
 	return setmetatable({
 		host = host,
 		pool = ReturnPool.new(),
-		scope = {}, -- session variables: @name -> value
+		scope = scope or {}, -- session variables: @name -> value
 	}, Evaluator)
 end
 

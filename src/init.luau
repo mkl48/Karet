@@ -111,6 +111,32 @@ Karet.Render = Render
 Karet.Cache = cache
 Karet.Query = query
 
+-- Shell environment variables - the @name store the shell reads/writes. This IS the
+-- evaluator's variable scope (shared), so defaults set here, the `set` command, and
+-- `(x = ...)` assignments all see the same table. Seed defaults before Karet.Start.
+Karet.Env = {} :: { [string]: any }
+
+function Karet.SetVar(name: string, value: any)
+	Karet.Env[name] = value
+end
+
+function Karet.GetVar(name: string): any
+	return Karet.Env[name]
+end
+
+-- a couple handy defaults; users add their own with Karet.SetVar or the `set` command
+Karet.Env.pi = math.pi
+Karet.Env.version = Karet.Version
+
+-- Open the @CONFIG editor (wired up by startClient). The `config` command calls this.
+function Karet.OpenConfig()
+	if Karet._openConfig then
+		Karet._openConfig()
+	else
+		warn("karet: config editor is client + Kaveat only (Start{ Kaveat = true })")
+	end
+end
+
 -- profiles, holds history / theme / saved kav scripts. Karet.Profile is the active one
 local profiles = { default = Profile.new("default") }
 Karet.Profiles = profiles
@@ -271,11 +297,40 @@ local function startClient(options: StartConfig)
 				local p = Players.LocalPlayer
 				return p and p.Name or "client"
 			end,
+			player = function()
+				return Players.LocalPlayer
+			end,
 			editor = function()
 				return Karet.Editor
 			end,
 			closeTerminal = function()
 				terminal:close()
+			end,
+			history = function()
+				return Karet.Profile.History
+			end,
+			-- shell env vars (the @name store) live on Karet.Env, shared with the evaluator
+			env = {
+				get = function(name)
+					return Karet.Env[name]
+				end,
+				set = function(name, value)
+					Karet.Env[name] = value
+				end,
+				unset = function(name)
+					Karet.Env[name] = nil
+				end,
+				list = function()
+					local names = {}
+					for k in Karet.Env do
+						table.insert(names, k)
+					end
+					table.sort(names)
+					return names
+				end,
+			},
+			openConfig = function()
+				Karet.OpenConfig()
 			end,
 			version = Karet.Version,
 		}
@@ -284,12 +339,18 @@ local function startClient(options: StartConfig)
 		end
 	end
 
+	-- Live, editable settings (the @CONFIG editor writes here). Seeded from Start options.
+	local cfg = {
+		promptType = options.PromptType or "text",
+		placement = options.Placement or "Window",
+		toggle = options.Toggle,
+	}
+
 	-- Dangerous-command confirmation. "window" pops a small themed modal; "text" (default)
 	-- asks y/N right on the terminal. Both yield the command's thread until answered.
-	local promptType = options.PromptType or "text"
 	local function confirm(name: string, _def: any): boolean
 		local question = `run dangerous command '{name}'?`
-		if promptType == "window" then
+		if cfg.promptType == "window" then
 			return terminal:promptWindow(question)
 		end
 		return terminal:promptText(question)
@@ -315,7 +376,7 @@ local function startClient(options: StartConfig)
 		ui = terminal:ui(),
 		confirm = confirm,
 	})
-	local evaluator = Shell.newEvaluator(host)
+	local evaluator = Shell.newEvaluator(host, Karet.Env)
 
 	terminal:onSubmit(function(line: string)
 		local parsed = Karet.Parse(line)
@@ -351,15 +412,86 @@ local function startClient(options: StartConfig)
 		editor:setStore(function()
 			return Karet.Profile.Kavs
 		end)
-		-- ctrl+enter / :run ships the script to the server to loadstring
+		-- ctrl+enter / :run ships the script to the server to loadstring. any print/warn the
+		-- script makes is captured server-side and replayed line by line into the kav output.
 		editor:setRunner(function(source, _context)
 			local res = networking:invokeKaveat(source, _context)
+			if type(res.lines) == "table" then
+				for _, l in res.lines do
+					editor:print(tostring(l.text), l.group or "Output")
+				end
+			end
 			if res.ok then
 				return res.output or "ran ok"
 			end
 			error(res.error or "run failed")
 		end)
 		Karet.Editor = editor
+
+		-- @CONFIG editor: a live settings file. it serialises the current settings, and
+		-- saving it (:w) parses key=value back and applies theme/prompt/placement live.
+		local function parseConfig(src: string): { [string]: string }
+			local out: { [string]: string } = {}
+			for line in (src .. "\n"):gmatch("(.-)\n") do
+				line = string.gsub(line, "#.*$", "")
+				local k, v = string.match(line, "^%s*([%w_]+)%s*=%s*(.-)%s*$")
+				if k then
+					out[string.lower(k)] = v
+				end
+			end
+			return out
+		end
+		local function serializeConfig(): string
+			return table.concat({
+				"# karet @CONFIG  -  edit values then :w to apply",
+				"# format:  key = value   (# starts a comment)",
+				"",
+				"theme     = " .. (Karet.Theme.Name() or "tokyonight"),
+				"prompt    = " .. cfg.promptType .. "        # text | window",
+				"placement = " .. cfg.placement .. "        # Window | Top | Bottom",
+				"toggle    = " .. tostring(cfg.toggle or "Semicolon"),
+			}, "\n")
+		end
+		local function applyConfig(src: string): { string }
+			local kv = parseConfig(src)
+			local out = {}
+			if kv.theme and kv.theme ~= "" and kv.theme ~= Karet.Theme.Name() then
+				if pcall(Karet.Theme.Set, kv.theme) then
+					Karet.Profile.CurrentTheme = kv.theme
+					table.insert(out, "theme -> " .. kv.theme)
+				else
+					table.insert(out, "! unknown theme '" .. kv.theme .. "'")
+				end
+			end
+			if kv.prompt == "text" or kv.prompt == "window" then
+				if kv.prompt ~= cfg.promptType then
+					cfg.promptType = kv.prompt
+					table.insert(out, "prompt -> " .. kv.prompt)
+				end
+			elseif kv.prompt then
+				table.insert(out, "! prompt must be text | window")
+			end
+			if kv.placement and kv.placement ~= cfg.placement then
+				if terminal:setPlacement(kv.placement) then
+					cfg.placement = kv.placement
+					table.insert(out, "placement -> " .. kv.placement)
+				else
+					table.insert(out, "! bad placement '" .. kv.placement .. "'")
+				end
+			end
+			if kv.toggle and kv.toggle ~= "" and kv.toggle ~= tostring(cfg.toggle) then
+				cfg.toggle = kv.toggle
+				table.insert(out, "toggle -> " .. kv.toggle .. " (restart to apply)")
+			end
+			if #out == 0 then
+				table.insert(out, "nothing changed")
+			end
+			return out
+		end
+		Karet._openConfig = function()
+			terminal:close()
+			editor:openConfig(serializeConfig(), applyConfig)
+		end
 	end
 
 	Karet.Active = terminal
@@ -415,11 +547,28 @@ local function startServer(options: StartConfig)
 		if not fn then
 			return { ok = false, error = "compile error: " .. tostring(compileErr) }
 		end
+		-- capture the script's print/warn so they replay in the kav output pane. everything
+		-- else (game, workspace, string, ...) falls through to the real environment.
+		local lines = {}
+		local function capture(group: string)
+			return function(...)
+				local parts = {}
+				for i = 1, select("#", ...) do
+					parts[i] = tostring((select(i, ...)))
+				end
+				table.insert(lines, { text = table.concat(parts, "\t"), group = group })
+			end
+		end
+		local okEnv = pcall(function()
+			setfenv(fn, setmetatable({ print = capture("Output"), warn = capture("Warn") }, { __index = getfenv() }))
+		end)
 		local okr, result = pcall(fn)
 		if not okr then
-			return { ok = false, error = tostring(result) }
+			table.insert(lines, { text = tostring(result), group = "Error" })
+			return { ok = false, error = tostring(result), lines = lines }
 		end
-		return { ok = true, output = result ~= nil and tostring(result) or "ran ok" }
+		local _ = okEnv
+		return { ok = true, output = result ~= nil and tostring(result) or "ran ok", lines = lines }
 	end)
 
 	-- OnConnect middleware

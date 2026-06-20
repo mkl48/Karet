@@ -547,6 +547,7 @@ function Terminal:ui(): { [string]: any }
 		Badge = Render.badge,
 		Color = Render.color,
 		Sparkline = Render.sparkline,
+		Render = Render, -- the whole pure builder module, for composing blocks
 	}
 end
 
@@ -594,6 +595,20 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 	end
 	self.input:applyTheme(palette)
 	self:colorPromptModal()
+end
+
+-- Move the window to a named placement live (config editor uses this). Full window only.
+function Terminal:setPlacement(name: string): boolean
+	local set = self.compact and COMPACT_PLACEMENTS or PLACEMENTS
+	local pl = set[name]
+	if not pl then
+		return false
+	end
+	self.placement = pl
+	self.window.AnchorPoint = pl.Anchor
+	self.window.Position = pl.Position
+	self.window.Size = pl.Size
+	return true
 end
 
 -- ---------------------------------------------------------------------------

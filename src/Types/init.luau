@@ -264,9 +264,13 @@ local BUILTINS: { [string]: Definition } = {
 -- ---------------------------------------------------------------------------
 
 function Types.new()
-	local self = setmetatable({ defs = {} :: { [string]: Definition } }, Types)
+	local self = setmetatable({
+		defs = {} :: { [string]: Definition },
+		lower = {} :: { [string]: Definition }, -- case-insensitive index (so @TYPE[number] works)
+	}, Types)
 	for name, def in BUILTINS do
 		self.defs[name] = def
+		self.lower[string.lower(name)] = def
 	end
 	return self
 end
@@ -276,14 +280,20 @@ function Types:Define(name: string, def: Definition)
 	assert(type(name) == "string" and name ~= "", "Karet.DefineType: name must be a non-empty string")
 	assert(type(def.Parse) == "function", `Karet.DefineType('{name}'): a Parse function is required`)
 	self.defs[name] = def
+	self.lower[string.lower(name)] = def
+end
+
+-- Resolve a type by name, exact first then case-insensitively (Number / number / NUMBER).
+function Types:resolve(name: string): Definition?
+	return self.defs[name] or self.lower[string.lower(tostring(name))]
 end
 
 function Types:get(name: string): Definition?
-	return self.defs[name]
+	return self:resolve(name)
 end
 
 function Types:has(name: string): boolean
-	return self.defs[name] ~= nil
+	return self:resolve(name) ~= nil
 end
 
 -- Coerce a raw value against a union of type names. Returns (typedValue, nil) for the
@@ -291,7 +301,7 @@ end
 function Types:coerce(raw: any, typeNames: { string }): (any, string?)
 	local lastErr: string? = "no matching type"
 	for _, name in typeNames do
-		local def = self.defs[name]
+		local def = self:resolve(name)
 		if not def then
 			lastErr = `unknown type '{name}'`
 		else
@@ -314,7 +324,7 @@ end
 
 -- Does a value satisfy a named type? Drives @TYPE[name] guards.
 function Types:satisfies(value: any, typeName: string): boolean
-	local def = self.defs[typeName]
+	local def = self:resolve(typeName)
 	if not def then
 		return false
 	end
@@ -327,7 +337,7 @@ end
 
 -- Autocomplete suggestions for a partial token against a type, or {} if unsupported.
 function Types:autocomplete(typeName: string, raw: string): { string }
-	local def = self.defs[typeName]
+	local def = self:resolve(typeName)
 	if def and def.Autocomplete then
 		return def.Autocomplete(raw)
 	end
