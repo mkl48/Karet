@@ -47,6 +47,7 @@ function Input.new(parent: Instance)
 	self.sugLabels = {} :: { TextLabel }
 	self._settingText = false
 	self._lastText = ""
+	self.keepFocus = true -- terminal sets this false when it closes so it stops grabbing keys
 
 	local prompt = create("TextLabel", {
 		Name = "Prompt",
@@ -205,7 +206,7 @@ function Input:submit()
 		end
 	end
 	task.defer(function()
-		if self.box.Parent then
+		if self.keepFocus and self.box.Parent then
 			self.box:CaptureFocus()
 		end
 	end)

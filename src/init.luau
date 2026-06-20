@@ -267,6 +267,9 @@ local function startClient(options: StartConfig)
 			editor = function()
 				return Karet.Editor
 			end,
+			closeTerminal = function()
+				terminal:close()
+			end,
 			version = Karet.Version,
 		}
 		for _, def in Commands.build(services) do

@@ -22,6 +22,7 @@ export type Services = {
 	get: (name: string) -> any?,
 	playerName: () -> string,
 	editor: (() -> any)?,
+	closeTerminal: (() -> ())?,
 	version: string,
 }
 
@@ -178,6 +179,10 @@ function Commands.build(services: Services): { any }
 				end
 				if a.client then
 					editor:setContext("Client")
+				end
+				-- hand keyboard focus over to the editor
+				if services.closeTerminal then
+					services.closeTerminal()
 				end
 				local file = ctx.Args.file
 				if file then

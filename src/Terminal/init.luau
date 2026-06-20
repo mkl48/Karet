@@ -344,6 +344,7 @@ function Terminal:open()
 	if self.switch then
 		self.switch.PushContext(OPEN_CONTEXT)
 	end
+	self.input.keepFocus = true
 	self.input:focus()
 end
 
@@ -352,6 +353,7 @@ function Terminal:close()
 		return
 	end
 	self.isOpen = false
+	self.input.keepFocus = false
 	self.input:blur()
 	self.window.Visible = false
 	if self.switch then
@@ -429,6 +431,10 @@ function Terminal:enableSwitch(toggle: any)
 		toggleConfig = { Bindings = { keyCode } }
 	end
 	action("KaretToggle", toggleConfig, function(event)
+		-- let shift+key (eg : in kaveat) through instead of toggling
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift) then
+			return
+		end
 		event:Consume()
 		self:toggle()
 	end)
