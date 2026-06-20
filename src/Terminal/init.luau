@@ -98,7 +98,6 @@ local function makeGui(window: Instance): Instance
 	return create("ScreenGui", {
 		Name = "Karet",
 		ResetOnSpawn = false,
-		IgnoreGuiInset = true,
 		DisplayOrder = 10,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		Enabled = true,
@@ -299,13 +298,14 @@ end
 function Terminal:mount(target: Instance?)
 	local parent = target or self.options.Parent
 	if not parent and RunService:IsClient() then
-		local player = Players.LocalPlayer
-		parent = player and player:FindFirstChildOfClass("PlayerGui")
+		-- wait so we don't run before the player/gui exists
+		local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+		parent = player:WaitForChild("PlayerGui")
 	end
 	if parent then
 		self.gui.Parent = parent
 	else
-		warn("Karet.Terminal:mount - no parent given and no PlayerGui found")
+		warn("karet: no parent and no playergui to mount into")
 	end
 	return self
 end
@@ -313,20 +313,19 @@ end
 function Terminal:applyTheme(palette: { [string]: Color3 })
 	self.palette = palette
 	self.window.BackgroundColor3 = palette.Background
+	-- border stuff is either a stroke or a thin frame
 	for _, inst in self.themed.Border do
-		inst.Color = palette.Border
+		if inst:IsA("UIStroke") then
+			inst.Color = palette.Border
+		else
+			inst.BackgroundColor3 = palette.Border
+		end
 	end
 	if self.compact then
 		self.resultLabel.TextColor3 = palette.Foreground
 	else
 		self.themed.Surface.BackgroundColor3 = palette.Surface
 		self.themed.Accent.TextColor3 = palette.Accent
-		-- separators are in themed.Border as Frames; recolour them too
-		for _, inst in self.themed.Border do
-			if not inst:IsA("UIStroke") then
-				inst.BackgroundColor3 = palette.Border
-			end
-		end
 		self.output:applyTheme(palette)
 	end
 	self.input:applyTheme(palette)

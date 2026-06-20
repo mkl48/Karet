@@ -2,7 +2,7 @@
 --
 -- The parser is where context lives (GRAMMAR.md §1): the same `/` token becomes a
 -- reference in value position and division in operator position; `&&` is chain control
--- between statements and boolean inside an expression. Nothing here throws — errors are
+-- between statements and boolean inside an expression. Nothing here throws - errors are
 -- collected as diagnostics with best-effort recovery, so this also powers `Analyze`.
 
 local Lexer = require(script.Parent.Lexer)

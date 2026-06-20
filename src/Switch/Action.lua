@@ -139,7 +139,14 @@ function Action:_PlatformAllowed()
 end
 
 function Action:_SetupIAS()
-	local actionsFolder = script.Actions
+	-- [Karet vendor patch] The upstream `Actions` folder is an empty dir that git/Rojo can
+	-- drop, leaving `script.Actions` nil and breaking every IAS action. Create it if missing.
+	local actionsFolder = script:FindFirstChild("Actions")
+	if not actionsFolder then
+		actionsFolder = Instance.new("Folder")
+		actionsFolder.Name = "Actions"
+		actionsFolder.Parent = script
+	end
 
 	local context = Instance.new("InputContext")
 	context.Name     = self.Name .. "_Context"

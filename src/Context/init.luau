@@ -4,7 +4,7 @@
 -- is the private side the Host reads back (collected returns, an abort message, a Context
 -- command's committed payload). Output (Print/Warn/Err/Reply) routes through opts.sink,
 -- which the terminal/console provides. ctx.Abort cancels mid-handler by raising a tagged
--- error the Host catches — so it unwinds the handler cleanly without a magic return value.
+-- error the Host catches - so it unwinds the handler cleanly without a magic return value.
 
 local Context = {}
 

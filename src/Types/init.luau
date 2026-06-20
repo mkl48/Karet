@@ -1,6 +1,6 @@
 -- Karet's argument type system. A type knows how to Parse a raw token into a value, and
 -- to Validate that value. `coerce` tries a union of types left-to-right (the first that
--- parses AND validates wins — GRAMMAR/DESIGN), so handlers never type-check. `satisfies`
+-- parses AND validates wins - GRAMMAR/DESIGN), so handlers never type-check. `satisfies`
 -- answers @TYPE[name] guards.
 --
 -- Built-in types that touch Roblox services (Player, Team, ...) reach for them lazily

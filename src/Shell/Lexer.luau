@@ -2,7 +2,7 @@
 --
 -- Neutral means: no FLAG / DIRECTIVE / SLASH_REF / SLASH_DIV tokens. `-`, `--`, `/`,
 -- `//` come out as plain operator tokens; the parser assigns meaning by context and by
--- `spaceBefore` adjacency (GRAMMAR.md §2). The lexer never throws — malformed input
+-- `spaceBefore` adjacency (GRAMMAR.md §2). The lexer never throws - malformed input
 -- yields diagnostics and the scan continues, so this also backs `Analyze`.
 
 local Token = require(script.Parent.Token)

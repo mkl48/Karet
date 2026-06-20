@@ -1,5 +1,5 @@
 -- The return pool (GRAMMAR.md §5). Commands push typed/labelled return records; `/`
--- references read them back. There is no positional stack — you reference returns by
+-- references read them back. There is no positional stack - you reference returns by
 -- what they are. Failed links contribute nothing, so the pool only holds real results.
 
 local ReturnPool = {}

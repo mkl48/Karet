@@ -101,7 +101,7 @@ function Registry:list(): { string }
 end
 
 -- ---------------------------------------------------------------------------
--- fluent builder — sugar that accumulates a Definition then :Register()s it
+-- fluent builder - sugar that accumulates a Definition then :Register()s it
 -- ---------------------------------------------------------------------------
 
 local Builder = {}

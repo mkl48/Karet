@@ -21,6 +21,7 @@ export type Services = {
 	list: () -> { string },
 	get: (name: string) -> any?,
 	playerName: () -> string,
+	editor: (() -> any)?,
 	version: string,
 }
 
@@ -148,6 +149,36 @@ function Commands.build(services: Services): { any }
 			Network = "Client",
 			On = { Client = function(ctx)
 				ctx.Print(table.concat(services.listThemes(), ", "))
+			end },
+		},
+
+		{
+			Name = "kaveat",
+			Aliases = { "kav" },
+			Description = "open the script editor",
+			Network = "Client",
+			Attributes = {
+				{ Name = "server", Short = "s", Description = "edit in server context" },
+				{ Name = "client", Short = "c", Description = "edit in client context" },
+			},
+			On = { Client = function(ctx)
+				local editor = services.editor and services.editor()
+				if not editor then
+					ctx.Err("kaveat isnt on, start with Kaveat = true")
+					return
+				end
+				local a = ctx.Attributes
+				if a.server and a.client then
+					ctx.Err("cant be both server and client")
+					return
+				end
+				if a.server then
+					editor:setContext("Server")
+				end
+				if a.client then
+					editor:setContext("Client")
+				end
+				editor:open()
 			end },
 		},
 	}

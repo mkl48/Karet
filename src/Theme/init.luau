@@ -1,8 +1,8 @@
--- Karet.Theme — one semantic colorscheme, piped through every surface (DESIGN → Theme).
+-- Karet.Theme - one semantic colorscheme, piped through every surface (DESIGN → Theme).
 --
 -- A theme is NOT a set of raw frame colors; it is a set of *semantic highlight groups*
 -- (Background, String, Error, Accent, ...), exactly like a Neovim colorscheme. Every
--- Karet surface — terminal, Kaveat editor, autocomplete ghost text, pickers, windows —
+-- Karet surface - terminal, Kaveat editor, autocomplete ghost text, pickers, windows -
 -- reads its colors from these groups, so `Theme.Set("gruvbox")` recolors the whole UI at
 -- once, the way `:colorscheme` does in Neovim.
 --
@@ -165,7 +165,7 @@ local function derive(p: Palette): Palette
 		return fallback
 	end
 
-	-- Core three first — everything else can lean on them.
+	-- Core three first - everything else can lean on them.
 	local bg = pick("Background", FALLBACK_BG)
 	local fg = pick("Foreground", FALLBACK_FG)
 	local accent = pick("Accent", FALLBACK_ACCENT)
@@ -230,7 +230,7 @@ local function emit()
 	for _, fn in listeners do
 		local ok, err = pcall(fn, active, activeName)
 		if not ok then
-			warn(`Karet.Theme: a change listener errored — {err}`)
+			warn(`Karet.Theme: a change listener errored - {err}`)
 		end
 	end
 end
@@ -324,13 +324,13 @@ function Theme.OnChanged(fn: (Palette, string?) -> ()): () -> ()
 end
 
 -- ---------------------------------------------------------------------------
--- built-in palettes — Neovim ports, so Karet feels at home out of the box.
+-- built-in palettes - Neovim ports, so Karet feels at home out of the box.
 -- Each is Define()d at load and also exposed as a value (Theme.Tokyonight) so it can be
 -- passed straight to Karet.Start{ Theme = Karet.Theme.Tokyonight }.
 -- ---------------------------------------------------------------------------
 
 local BUILTINS: { [string]: Palette } = {
-	-- Tokyonight (night) — https://github.com/folke/tokyonight.nvim
+	-- Tokyonight (night) - https://github.com/folke/tokyonight.nvim
 	tokyonight = {
 		Background = hex("1a1b26"),
 		Surface = hex("24283b"),
@@ -353,7 +353,7 @@ local BUILTINS: { [string]: Palette } = {
 		Selection = hex("283457"),
 	},
 
-	-- Gruvbox (dark, medium) — https://github.com/morhetz/gruvbox
+	-- Gruvbox (dark, medium) - https://github.com/morhetz/gruvbox
 	gruvbox = {
 		Background = hex("282828"),
 		Surface = hex("3c3836"),
@@ -376,7 +376,7 @@ local BUILTINS: { [string]: Palette } = {
 		Selection = hex("504945"),
 	},
 
-	-- Catppuccin (Mocha) — https://github.com/catppuccin/catppuccin
+	-- Catppuccin (Mocha) - https://github.com/catppuccin/catppuccin
 	catppuccin = {
 		Background = hex("1e1e2e"),
 		Surface = hex("313244"),
@@ -399,7 +399,7 @@ local BUILTINS: { [string]: Palette } = {
 		Selection = hex("45475a"),
 	},
 
-	-- Nord — https://www.nordtheme.com
+	-- Nord - https://www.nordtheme.com
 	nord = {
 		Background = hex("2e3440"),
 		Surface = hex("3b4252"),

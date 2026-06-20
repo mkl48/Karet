@@ -1,7 +1,7 @@
 -- The Host: the bridge between the pure shell Evaluator and Karet's command framework.
 --
--- The Evaluator dot-calls four functions on whatever host it's given —
--- getCommand / coerce / satisfies / run — so this module returns a *table of closures*
+-- The Evaluator dot-calls four functions on whatever host it's given -
+-- getCommand / coerce / satisfies / run - so this module returns a *table of closures*
 -- (not an OO object) capturing the registry, type system, realm, output sink, auth, and
 -- middleware. `run` is the realm dispatcher:
 --
@@ -10,7 +10,7 @@
 --   Context          -> run On.Client locally to build a payload (ctx.Commit), then ship.
 --
 -- On the server, the Networking listener calls `runServerRequest`, which re-validates the
--- arguments authoritatively, checks auth, and runs On.Server — the client is never trusted.
+-- arguments authoritatively, checks auth, and runs On.Server - the client is never trusted.
 
 local Context = require(script.Parent.Context)
 
@@ -60,7 +60,7 @@ function Host.new(opts: Options)
 
 	-- Output routing: the client writes straight to the provided sink (the terminal). The
 	-- server buffers a command's output per-request so it can ride back inside the Result
-	-- and be replayed on the caller's screen — there's no always-on server->client console
+	-- and be replayed on the caller's screen - there's no always-on server->client console
 	-- channel yet.
 	local clientSink = opts.sink or function() end
 	local currentOutput: { { group: string, message: string } }? = nil

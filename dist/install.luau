@@ -30,14 +30,14 @@ if old then
 end
 
 local _1 = mod("Karet", RS, [[
--- Karet — an in-game command framework and terminal for Roblox.
+-- Karet - an in-game command framework and terminal for Roblox.
 --
 -- Karet is the product, the terminal emulator (the ScreenGui CLI surface), and the
 -- shell/command grammar that runs inside it. Kaveat is the built-in Luau editor.
 -- Built on Switch (input) and Substance (networking).
 --
 -- One entry point on both realms: require(ReplicatedStorage.Karet). Behaviour diverges
--- by RunService internally — Start() boots the client terminal or the server listener.
+-- by RunService internally - Start() boots the client terminal or the server listener.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -53,6 +53,7 @@ local Commands = require(script.Commands)
 local Kaveat = require(script.Kaveat)
 local Cache = require(script.Cache)
 local Query = require(script.Query)
+local Profile = require(script.Profile)
 local ContextMod = require(script.Context)
 
 -- ---------------------------------------------------------------------------
@@ -133,6 +134,21 @@ Karet.Kaveat = Kaveat
 -- ctx.Cache / ctx.Query. One instance per realm.
 Karet.Cache = cache
 Karet.Query = query
+
+-- profiles, holds history / theme / saved kav scripts. Karet.Profile is the active one
+local profiles = { default = Profile.new("default") }
+Karet.Profiles = profiles
+Karet.Profile = profiles.default
+
+function Karet.UseProfile(name: string): Profile.Profile
+	local p = profiles[name]
+	if not p then
+		p = Profile.new(name)
+		profiles[name] = p
+	end
+	Karet.Profile = p
+	return p
+end
 
 -- Config the server stashes (rate limiting etc. land in a later layer).
 Karet.Config = {}
@@ -237,12 +253,21 @@ end
 local function startClient(options: StartConfig)
 	if options.Theme ~= nil then
 		Karet.Theme.Set(options.Theme)
+	elseif Karet.Profile.CurrentTheme ~= "" then
+		Karet.Theme.Set(Karet.Profile.CurrentTheme)
 	end
 
 	local terminal = Terminal.new(options :: any)
 	terminal:mount()
+	-- back the input history with the profile so it sticks around
+	terminal.input.history = Karet.Profile.History
 	if options.Toggle then
-		terminal:enableSwitch(options.Toggle)
+		local ok, err = pcall(function()
+			terminal:enableSwitch(options.Toggle)
+		end)
+		if not ok then
+			warn("karet: couldnt bind the toggle key - " .. tostring(err))
+		end
 	end
 
 	-- Built-in commands (help/clear/echo/theme/...), unless opted out.
@@ -253,6 +278,7 @@ local function startClient(options: StartConfig)
 			end,
 			setTheme = function(name)
 				Karet.Theme.Set(name)
+				Karet.Profile.CurrentTheme = name
 			end,
 			listThemes = function()
 				return Karet.Theme.List()
@@ -266,6 +292,9 @@ local function startClient(options: StartConfig)
 			playerName = function()
 				local p = Players.LocalPlayer
 				return p and p.Name or "client"
+			end,
+			editor = function()
+				return Karet.Editor
 			end,
 			version = Karet.Version,
 		}
@@ -477,6 +506,7 @@ export type Services = {
 	list: () -> { string },
 	get: (name: string) -> any?,
 	playerName: () -> string,
+	editor: (() -> any)?,
 	version: string,
 }
 
@@ -606,6 +636,36 @@ function Commands.build(services: Services): { any }
 				ctx.Print(table.concat(services.listThemes(), ", "))
 			end },
 		},
+
+		{
+			Name = "kaveat",
+			Aliases = { "kav" },
+			Description = "open the script editor",
+			Network = "Client",
+			Attributes = {
+				{ Name = "server", Short = "s", Description = "edit in server context" },
+				{ Name = "client", Short = "c", Description = "edit in client context" },
+			},
+			On = { Client = function(ctx)
+				local editor = services.editor and services.editor()
+				if not editor then
+					ctx.Err("kaveat isnt on, start with Kaveat = true")
+					return
+				end
+				local a = ctx.Attributes
+				if a.server and a.client then
+					ctx.Err("cant be both server and client")
+					return
+				end
+				if a.server then
+					editor:setContext("Server")
+				end
+				if a.client then
+					editor:setContext("Client")
+				end
+				editor:open()
+			end },
+		},
 	}
 end
 
@@ -618,7 +678,7 @@ local _4 = mod("Context", _1, [[
 -- is the private side the Host reads back (collected returns, an abort message, a Context
 -- command's committed payload). Output (Print/Warn/Err/Reply) routes through opts.sink,
 -- which the terminal/console provides. ctx.Abort cancels mid-handler by raising a tagged
--- error the Host catches — so it unwinds the handler cleanly without a magic return value.
+-- error the Host catches - so it unwinds the handler cleanly without a magic return value.
 
 local Context = {}
 
@@ -765,8 +825,8 @@ return Context
 mod("Host", _1, [[
 -- The Host: the bridge between the pure shell Evaluator and Karet's command framework.
 --
--- The Evaluator dot-calls four functions on whatever host it's given —
--- getCommand / coerce / satisfies / run — so this module returns a *table of closures*
+-- The Evaluator dot-calls four functions on whatever host it's given -
+-- getCommand / coerce / satisfies / run - so this module returns a *table of closures*
 -- (not an OO object) capturing the registry, type system, realm, output sink, auth, and
 -- middleware. `run` is the realm dispatcher:
 --
@@ -775,7 +835,7 @@ mod("Host", _1, [[
 --   Context          -> run On.Client locally to build a payload (ctx.Commit), then ship.
 --
 -- On the server, the Networking listener calls `runServerRequest`, which re-validates the
--- arguments authoritatively, checks auth, and runs On.Server — the client is never trusted.
+-- arguments authoritatively, checks auth, and runs On.Server - the client is never trusted.
 
 local Context = require(script.Parent.Context)
 
@@ -825,7 +885,7 @@ function Host.new(opts: Options)
 
 	-- Output routing: the client writes straight to the provided sink (the terminal). The
 	-- server buffers a command's output per-request so it can ride back inside the Result
-	-- and be replayed on the caller's screen — there's no always-on server->client console
+	-- and be replayed on the caller's screen - there's no always-on server->client console
 	-- channel yet.
 	local clientSink = opts.sink or function() end
 	local currentOutput: { { group: string, message: string } }? = nil
@@ -15222,7 +15282,34 @@ end
 
 return Networking
 ]])
-local _9 = mod("Query", _1, [[
+local _9 = mod("Profile", _1, [[
+-- a profile holds the per user stuff, history, the theme they picked, saved kav scripts
+-- and any custom commands. its just in memory for now, can hook it to a datastore later
+
+local Profile = {}
+Profile.__index = Profile
+
+export type Profile = {
+	Name: string,
+	Commands: { [string]: any },
+	CurrentTheme: string,
+	History: { string },
+	Kavs: { [string]: string },
+}
+
+function Profile.new(name: string?): Profile
+	return setmetatable({
+		Name = name or "default",
+		Commands = {},
+		CurrentTheme = "",
+		History = {},
+		Kavs = {},
+	}, Profile) :: any
+end
+
+return Profile
+]])
+local _10 = mod("Query", _1, [[
 -- A named-query registry. Karet (and your game) registers providers - "players", "teams",
 -- "commands", whatever - and commands run them by name through ctx.Query. This gives
 -- commands a uniform way to look things up without each one re-implementing resolution.
@@ -15274,7 +15361,7 @@ end
 
 return Query
 ]])
-local _10 = mod("Registry", _1, [[
+local _11 = mod("Registry", _1, [[
 -- The command registry. Holds command definitions, resolves names + aliases
 -- (case-insensitively), and offers the fluent builder (sugar over the table form).
 --
@@ -15378,7 +15465,7 @@ function Registry:list(): { string }
 end
 
 -- ---------------------------------------------------------------------------
--- fluent builder — sugar that accumulates a Definition then :Register()s it
+-- fluent builder - sugar that accumulates a Definition then :Register()s it
 -- ---------------------------------------------------------------------------
 
 local Builder = {}
@@ -15439,7 +15526,7 @@ end
 
 return Registry
 ]])
-local _11 = mod("Shell", _1, [[
+local _12 = mod("Shell", _1, [[
 -- The Karet shell: the tokenizer + parser + evaluator that turn a line of input into an
 -- executed chain. This is the power-user surface; the umbrella `Karet` re-exports the
 -- common entry points (Karet.Tokenize / Parse / Analyze / ...) flat.
@@ -15489,7 +15576,7 @@ end
 
 return Shell
 ]])
-mod("Ast", _11, [[
+mod("Ast", _12, [[
 -- AST node kinds for the Karet shell. The parser builds plain tables tagged with a
 -- `kind` from Ast.Kind; the evaluator dispatches on it. See GRAMMAR.md §3.
 
@@ -15519,7 +15606,7 @@ Ast.Kind = {
 
 return Ast
 ]])
-mod("Evaluator", _11, [[
+mod("Evaluator", _12, [[
 -- The Karet shell evaluator: walk an AST, run chains/guards, drive the return pool and
 -- session variables, and evaluate expressions/type-guards.
 --
@@ -15937,12 +16024,12 @@ end
 
 return Evaluator
 ]])
-mod("Lexer", _11, [[
+mod("Lexer", _12, [[
 -- The Karet shell lexer: source text -> a flat list of neutral tokens.
 --
 -- Neutral means: no FLAG / DIRECTIVE / SLASH_REF / SLASH_DIV tokens. `-`, `--`, `/`,
 -- `//` come out as plain operator tokens; the parser assigns meaning by context and by
--- `spaceBefore` adjacency (GRAMMAR.md §2). The lexer never throws — malformed input
+-- `spaceBefore` adjacency (GRAMMAR.md §2). The lexer never throws - malformed input
 -- yields diagnostics and the scan continues, so this also backs `Analyze`.
 
 local Token = require(script.Parent.Token)
@@ -16277,12 +16364,12 @@ end
 
 return Lexer
 ]])
-mod("Parser", _11, [[
+mod("Parser", _12, [[
 -- Recursive-descent parser for the Karet shell. Tokens -> AST + diagnostics.
 --
 -- The parser is where context lives (GRAMMAR.md §1): the same `/` token becomes a
 -- reference in value position and division in operator position; `&&` is chain control
--- between statements and boolean inside an expression. Nothing here throws — errors are
+-- between statements and boolean inside an expression. Nothing here throws - errors are
 -- collected as diagnostics with best-effort recovery, so this also powers `Analyze`.
 
 local Lexer = require(script.Parent.Lexer)
@@ -16844,9 +16931,9 @@ end
 
 return Parser
 ]])
-mod("ReturnPool", _11, [[
+mod("ReturnPool", _12, [[
 -- The return pool (GRAMMAR.md §5). Commands push typed/labelled return records; `/`
--- references read them back. There is no positional stack — you reference returns by
+-- references read them back. There is no positional stack - you reference returns by
 -- what they are. Failed links contribute nothing, so the pool only holds real results.
 
 local ReturnPool = {}
@@ -16955,7 +17042,7 @@ end
 
 return ReturnPool
 ]])
-mod("Token", _11, [[
+mod("Token", _12, [[
 -- Token kinds and the Token shape for the Karet shell lexer.
 --
 -- The lexer is deliberately neutral (see GRAMMAR.md §2): it never decides whether a
@@ -17031,7 +17118,7 @@ export type Token = {
 
 return Token
 ]])
-local _12 = mod("Substance", _1, [[
+local _13 = mod("Substance", _1, [[
 -- Substance
 -- init.lua
 -- Plinko Labs
@@ -17103,7 +17190,7 @@ Substance.Type = Particle.Type
 
 return Substance
 ]])
-local _13 = mod("Async", _12, [[
+local _14 = mod("Async", _13, [[
 -- Substance
 -- Async/init.lua
 -- Plinko Labs
@@ -17116,7 +17203,7 @@ return {
 	Branch = Branch,
 }
 ]])
-mod("Branch", _13, [[
+mod("Branch", _14, [[
 -- Substance
 -- Async/Branch.lua
 -- Plinko Labs
@@ -17143,7 +17230,7 @@ end
 
 return Branch
 ]])
-mod("Promise", _13, [==[
+mod("Promise", _14, [==[
 --[[
 	An implementation of Promises similar to Promise/A+.
 ]]
@@ -19126,7 +19213,7 @@ function Promise.onUnhandledRejection(callback)
 end
 
 return Promise]==])
-mod("Reaction", _13, [[
+mod("Reaction", _14, [[
 -- Substance
 -- Async/Reaction.lua
 -- Plinko Labs
@@ -19273,7 +19360,7 @@ end
 
 return Reaction
 ]])
-local _14 = mod("Particle", _12, [[
+local _15 = mod("Particle", _13, [[
 -- Substance
 -- Particle/init.lua
 -- Plinko Labs
@@ -19314,7 +19401,7 @@ end
 
 return Particle
 ]])
-mod("Atom", _14, [[
+mod("Atom", _15, [[
 -- Substance
 -- Particle/Atom.lua
 -- Plinko Labs
@@ -19385,7 +19472,7 @@ end
 
 return Atom
 ]])
-mod("Dispatch", _14, [[
+mod("Dispatch", _15, [[
 -- Substance
 -- Particle/Dispatch.lua
 -- Plinko Labs
@@ -19592,7 +19679,7 @@ end
 
 return Dispatch
 ]])
-mod("Fossil", _14, [[
+mod("Fossil", _15, [[
 -- Substance
 -- Particle/Fossil.lua
 -- Plinko Labs
@@ -19643,7 +19730,7 @@ end
 
 return Fossil
 ]])
-mod("Hooks", _14, [[
+mod("Hooks", _15, [[
 -- Substance
 -- Particle/Hooks.lua
 -- Plinko Labs
@@ -19697,7 +19784,7 @@ end
 
 return Hooks
 ]])
-mod("Molecule", _14, [[
+mod("Molecule", _15, [[
 -- Substance
 -- Particle/Molecule.lua
 -- Plinko Labs
@@ -19752,7 +19839,7 @@ end
 
 return Molecule
 ]])
-mod("Registry", _14, [[
+mod("Registry", _15, [[
 -- Substance
 -- Particle/Registry.lua
 -- Plinko Labs
@@ -19799,7 +19886,7 @@ end
 
 return Registry
 ]])
-mod("Remotes", _14, [[
+mod("Remotes", _15, [[
 -- Substance
 -- Particle/Remotes.lua
 -- Plinko Labs
@@ -19857,7 +19944,7 @@ end
 
 return Remotes
 ]])
-mod("Schema", _14, [[
+mod("Schema", _15, [[
 -- Substance
 -- Particle/Schema.lua
 -- Plinko Labs
@@ -19944,14 +20031,14 @@ end
 
 return Schema
 ]])
-local _15 = mod("Type", _14, [[
+local _16 = mod("Type", _15, [[
 -- Substance
 -- Particle/Type/init.lua
 -- Plinko Labs
 
 return require(script.Constructors)
 ]])
-mod("Constructors", _15, [[
+mod("Constructors", _16, [[
 -- Substance
 -- Particle/Type/Constructors.lua
 -- Plinko Labs
@@ -20120,7 +20207,7 @@ end
 
 return Type
 ]])
-mod("TypeDef", _15, [[
+mod("TypeDef", _16, [[
 -- Substance
 -- Particle/Type/TypeDef.lua
 -- Plinko Labs
@@ -20637,7 +20724,7 @@ end
 
 return TypeDef
 ]])
-mod("Types", _14, [[
+mod("Types", _15, [[
 -- Substance
 -- Particle/Types.lua
 -- Plinko Labs
@@ -20680,7 +20767,7 @@ export type Channel = {
 
 return {}
 ]])
-local _16 = mod("React", _12, [[
+local _17 = mod("React", _13, [[
 -- Substance
 -- React/init.lua
 -- Plinko Labs
@@ -20705,7 +20792,7 @@ end
 
 return React
 ]])
-mod("Entangle", _16, [[
+mod("Entangle", _17, [[
 -- Substance
 -- React/Entangle.lua
 -- Plinko Labs
@@ -20779,7 +20866,7 @@ end
 
 return Entangle
 ]])
-mod("Flux", _16, [[
+mod("Flux", _17, [[
 -- Substance
 -- React/Flux.lua
 -- Plinko Labs
@@ -20885,7 +20972,7 @@ end
 
 return Flux
 ]])
-mod("River", _16, [[
+mod("River", _17, [[
 -- Substance
 -- React/River.lua
 -- Plinko Labs
@@ -20949,7 +21036,7 @@ end
 
 return River
 ]])
-local _17 = mod("Tools", _12, [[
+local _18 = mod("Tools", _13, [[
 -- Substance
 -- Tools/init.lua
 -- Plinko Labs
@@ -20979,7 +21066,7 @@ end
 
 return Tools
 ]])
-mod("Batch", _17, [[
+mod("Batch", _18, [[
 -- Substance
 -- Tools/Batch.lua
 -- Plinko Labs
@@ -21013,7 +21100,7 @@ end
 
 return Batch
 ]])
-mod("Fission", _17, [[
+mod("Fission", _18, [[
 -- Substance
 -- Tools/Fission.lua
 -- Plinko Labs
@@ -21045,7 +21132,7 @@ end
 
 return Fission
 ]])
-mod("Fossil", _17, [[
+mod("Fossil", _18, [[
 -- Substance
 -- Tools/Fossil.lua
 -- Plinko Labs
@@ -21060,7 +21147,7 @@ return {
 	Clear = ParticleFossil.Clear,
 }
 ]])
-mod("Hooks", _17, [[
+mod("Hooks", _18, [[
 -- Substance
 -- Tools/Hooks.lua
 -- Plinko Labs
@@ -21072,7 +21159,7 @@ return {
 	Hook = ParticleHooks.Hook,
 }
 ]])
-mod("LandLine", _17, [[
+mod("LandLine", _18, [[
 -- Substance
 -- Tools/LandLine.lua
 -- Plinko Labs
@@ -21118,7 +21205,7 @@ end
 
 return LandLine
 ]])
-local _18 = mod("Switch", _1, [[
+local _19 = mod("Switch", _1, [[
 local Enums    = require(script.Enums)
 local Platform = require(script.Platform)
 local Context  = require(script.Context)
@@ -21209,7 +21296,7 @@ function Switch.OnContextChanged(cb: ({ string }) -> ()): () -> ()
 end
 
 return Switch]])
-mod("Action", _18, [[
+mod("Action", _19, [[
 -- Switch
 -- Action.lua
 -- Plinko Labs
@@ -21351,7 +21438,14 @@ function Action:_PlatformAllowed()
 end
 
 function Action:_SetupIAS()
-	local actionsFolder = script.Actions
+	-- [Karet vendor patch] The upstream `Actions` folder is an empty dir that git/Rojo can
+	-- drop, leaving `script.Actions` nil and breaking every IAS action. Create it if missing.
+	local actionsFolder = script:FindFirstChild("Actions")
+	if not actionsFolder then
+		actionsFolder = Instance.new("Folder")
+		actionsFolder.Name = "Actions"
+		actionsFolder.Parent = script
+	end
 
 	local context = Instance.new("InputContext")
 	context.Name     = self.Name .. "_Context"
@@ -21941,7 +22035,7 @@ function Action:Destroy()
 end
 
 return Action]])
-mod("Connection", _18, [[
+mod("Connection", _19, [[
 -- Switch
 -- Connection.lua
 -- Plinko Labs
@@ -22045,7 +22139,7 @@ return {
 	Connection = Connection,
 	Promise    = Promise,
 }]])
-mod("Context", _18, [[
+mod("Context", _19, [[
 -- Switch
 -- Context.lua
 -- Plinko Labs
@@ -22221,7 +22315,7 @@ function Context.OnChanged(cb: (stack: { string }) -> ()): () -> ()
 end
 
 return Context]])
-mod("Enums", _18, [[
+mod("Enums", _19, [[
 -- Switch
 -- Enums.lua
 -- Plinko Labs
@@ -22312,7 +22406,7 @@ Enums.Driver = {
 }
 
 return Enums]])
-mod("Platform", _18, [[
+mod("Platform", _19, [[
 -- Switch
 -- Platform.lua
 -- Plinko Labs
@@ -22387,7 +22481,7 @@ function Platform.OnChanged(cb: (new: Platform, prev: Platform) -> ()): () -> ()
 end
 
 return Platform]])
-mod("Promise", _18, [==[
+mod("Promise", _19, [==[
 --[[
 	An implementation of Promises similar to Promise/A+.
 ]]
@@ -24370,7 +24464,7 @@ function Promise.onUnhandledRejection(callback)
 end
 
 return Promise]==])
-mod("Registry", _18, [[
+mod("Registry", _19, [[
 -- Switch
 -- Registry.lua
 -- Plinko Labs
@@ -24506,7 +24600,7 @@ function Registry.All(): { Types.ActionHandle }
 end
 
 return Registry]])
-mod("Types", _18, [[
+mod("Types", _19, [[
 -- Switch
 -- Types.lua
 -- Plinko Labs
@@ -24601,7 +24695,7 @@ export type ActionHandle = {
 }
 
 return {}]])
-local _19 = mod("Terminal", _1, [[
+local _20 = mod("Terminal", _1, [[
 -- Karet.Terminal - the visible console surface (the Alacritty analogue).
 --
 -- Composes the window chrome, the scrolling Output log, and the Input row, drives them all
@@ -24702,7 +24796,6 @@ local function makeGui(window: Instance): Instance
 	return create("ScreenGui", {
 		Name = "Karet",
 		ResetOnSpawn = false,
-		IgnoreGuiInset = true,
 		DisplayOrder = 10,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		Enabled = true,
@@ -24903,13 +24996,14 @@ end
 function Terminal:mount(target: Instance?)
 	local parent = target or self.options.Parent
 	if not parent and RunService:IsClient() then
-		local player = Players.LocalPlayer
-		parent = player and player:FindFirstChildOfClass("PlayerGui")
+		-- wait so we don't run before the player/gui exists
+		local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+		parent = player:WaitForChild("PlayerGui")
 	end
 	if parent then
 		self.gui.Parent = parent
 	else
-		warn("Karet.Terminal:mount - no parent given and no PlayerGui found")
+		warn("karet: no parent and no playergui to mount into")
 	end
 	return self
 end
@@ -24917,20 +25011,19 @@ end
 function Terminal:applyTheme(palette: { [string]: Color3 })
 	self.palette = palette
 	self.window.BackgroundColor3 = palette.Background
+	-- border stuff is either a stroke or a thin frame
 	for _, inst in self.themed.Border do
-		inst.Color = palette.Border
+		if inst:IsA("UIStroke") then
+			inst.Color = palette.Border
+		else
+			inst.BackgroundColor3 = palette.Border
+		end
 	end
 	if self.compact then
 		self.resultLabel.TextColor3 = palette.Foreground
 	else
 		self.themed.Surface.BackgroundColor3 = palette.Surface
 		self.themed.Accent.TextColor3 = palette.Accent
-		-- separators are in themed.Border as Frames; recolour them too
-		for _, inst in self.themed.Border do
-			if not inst:IsA("UIStroke") then
-				inst.BackgroundColor3 = palette.Border
-			end
-		end
 		self.output:applyTheme(palette)
 	end
 	self.input:applyTheme(palette)
@@ -25104,10 +25197,10 @@ end
 
 return Terminal
 ]])
-mod("Input", _19, [[
+mod("Input", _20, [[
 -- The terminal's input row: a Prompt sigil + a real TextBox.
 --
--- The TextBox does the actual typing (characters, IME, clipboard, caret) — Switch is not
+-- The TextBox does the actual typing (characters, IME, clipboard, caret) - Switch is not
 -- involved in text entry, only in the open/close/history *actions* (wired by the
 -- orchestrator). Submitting fires onSubmit(line) and records the line in a command
 -- history that Up/Down navigate via historyPrev/historyNext.
@@ -25288,7 +25381,7 @@ end
 
 return Input
 ]])
-mod("Output", _19, [[
+mod("Output", _20, [[
 -- The terminal's scrolling output log. Each line is a TextLabel coloured by a semantic
 -- theme group (Output / Error / Warn / Info / Success / Comment for echoes), so a theme
 -- switch recolours the whole backlog. Lines remember their group, which is what lets
@@ -25398,7 +25491,7 @@ end
 
 return Output
 ]])
-mod("create", _19, [[
+mod("create", _20, [[
 -- Tiny declarative Instance builder for the terminal UI.
 --
 -- create("Frame", { Size = ..., Children = { ... }, Parent = ... }) sets every property,
@@ -25429,12 +25522,12 @@ end
 
 return create
 ]])
-local _20 = mod("Theme", _1, [[
--- Karet.Theme — one semantic colorscheme, piped through every surface (DESIGN → Theme).
+local _21 = mod("Theme", _1, [[
+-- Karet.Theme - one semantic colorscheme, piped through every surface (DESIGN → Theme).
 --
 -- A theme is NOT a set of raw frame colors; it is a set of *semantic highlight groups*
 -- (Background, String, Error, Accent, ...), exactly like a Neovim colorscheme. Every
--- Karet surface — terminal, Kaveat editor, autocomplete ghost text, pickers, windows —
+-- Karet surface - terminal, Kaveat editor, autocomplete ghost text, pickers, windows -
 -- reads its colors from these groups, so `Theme.Set("gruvbox")` recolors the whole UI at
 -- once, the way `:colorscheme` does in Neovim.
 --
@@ -25597,7 +25690,7 @@ local function derive(p: Palette): Palette
 		return fallback
 	end
 
-	-- Core three first — everything else can lean on them.
+	-- Core three first - everything else can lean on them.
 	local bg = pick("Background", FALLBACK_BG)
 	local fg = pick("Foreground", FALLBACK_FG)
 	local accent = pick("Accent", FALLBACK_ACCENT)
@@ -25662,7 +25755,7 @@ local function emit()
 	for _, fn in listeners do
 		local ok, err = pcall(fn, active, activeName)
 		if not ok then
-			warn(`Karet.Theme: a change listener errored — {err}`)
+			warn(`Karet.Theme: a change listener errored - {err}`)
 		end
 	end
 end
@@ -25756,13 +25849,13 @@ function Theme.OnChanged(fn: (Palette, string?) -> ()): () -> ()
 end
 
 -- ---------------------------------------------------------------------------
--- built-in palettes — Neovim ports, so Karet feels at home out of the box.
+-- built-in palettes - Neovim ports, so Karet feels at home out of the box.
 -- Each is Define()d at load and also exposed as a value (Theme.Tokyonight) so it can be
 -- passed straight to Karet.Start{ Theme = Karet.Theme.Tokyonight }.
 -- ---------------------------------------------------------------------------
 
 local BUILTINS: { [string]: Palette } = {
-	-- Tokyonight (night) — https://github.com/folke/tokyonight.nvim
+	-- Tokyonight (night) - https://github.com/folke/tokyonight.nvim
 	tokyonight = {
 		Background = hex("1a1b26"),
 		Surface = hex("24283b"),
@@ -25785,7 +25878,7 @@ local BUILTINS: { [string]: Palette } = {
 		Selection = hex("283457"),
 	},
 
-	-- Gruvbox (dark, medium) — https://github.com/morhetz/gruvbox
+	-- Gruvbox (dark, medium) - https://github.com/morhetz/gruvbox
 	gruvbox = {
 		Background = hex("282828"),
 		Surface = hex("3c3836"),
@@ -25808,7 +25901,7 @@ local BUILTINS: { [string]: Palette } = {
 		Selection = hex("504945"),
 	},
 
-	-- Catppuccin (Mocha) — https://github.com/catppuccin/catppuccin
+	-- Catppuccin (Mocha) - https://github.com/catppuccin/catppuccin
 	catppuccin = {
 		Background = hex("1e1e2e"),
 		Surface = hex("313244"),
@@ -25831,7 +25924,7 @@ local BUILTINS: { [string]: Palette } = {
 		Selection = hex("45475a"),
 	},
 
-	-- Nord — https://www.nordtheme.com
+	-- Nord - https://www.nordtheme.com
 	nord = {
 		Background = hex("2e3440"),
 		Surface = hex("3b4252"),
@@ -25865,10 +25958,10 @@ Theme.Set("tokyonight")
 
 return Theme
 ]])
-local _21 = mod("Types", _1, [[
+local _22 = mod("Types", _1, [[
 -- Karet's argument type system. A type knows how to Parse a raw token into a value, and
 -- to Validate that value. `coerce` tries a union of types left-to-right (the first that
--- parses AND validates wins — GRAMMAR/DESIGN), so handlers never type-check. `satisfies`
+-- parses AND validates wins - GRAMMAR/DESIGN), so handlers never type-check. `satisfies`
 -- answers @TYPE[name] guards.
 --
 -- Built-in types that touch Roblox services (Player, Team, ...) reach for them lazily
@@ -26251,5 +26344,5 @@ end
 return deps
 ]])
 
-print("[Karet] installed 84 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 85 modules under ReplicatedStorage.Karet")
 return true

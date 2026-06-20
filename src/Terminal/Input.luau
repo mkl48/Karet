@@ -1,6 +1,6 @@
 -- The terminal's input row: a Prompt sigil + a real TextBox.
 --
--- The TextBox does the actual typing (characters, IME, clipboard, caret) — Switch is not
+-- The TextBox does the actual typing (characters, IME, clipboard, caret) - Switch is not
 -- involved in text entry, only in the open/close/history *actions* (wired by the
 -- orchestrator). Submitting fires onSubmit(line) and records the line in a command
 -- history that Up/Down navigate via historyPrev/historyNext.

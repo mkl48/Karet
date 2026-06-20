@@ -1,11 +1,11 @@
--- Karet — an in-game command framework and terminal for Roblox.
+-- Karet - an in-game command framework and terminal for Roblox.
 --
 -- Karet is the product, the terminal emulator (the ScreenGui CLI surface), and the
 -- shell/command grammar that runs inside it. Kaveat is the built-in Luau editor.
 -- Built on Switch (input) and Substance (networking).
 --
 -- One entry point on both realms: require(ReplicatedStorage.Karet). Behaviour diverges
--- by RunService internally — Start() boots the client terminal or the server listener.
+-- by RunService internally - Start() boots the client terminal or the server listener.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -21,6 +21,7 @@ local Commands = require(script.Commands)
 local Kaveat = require(script.Kaveat)
 local Cache = require(script.Cache)
 local Query = require(script.Query)
+local Profile = require(script.Profile)
 local ContextMod = require(script.Context)
 
 -- ---------------------------------------------------------------------------
@@ -101,6 +102,21 @@ Karet.Kaveat = Kaveat
 -- ctx.Cache / ctx.Query. One instance per realm.
 Karet.Cache = cache
 Karet.Query = query
+
+-- profiles, holds history / theme / saved kav scripts. Karet.Profile is the active one
+local profiles = { default = Profile.new("default") }
+Karet.Profiles = profiles
+Karet.Profile = profiles.default
+
+function Karet.UseProfile(name: string): Profile.Profile
+	local p = profiles[name]
+	if not p then
+		p = Profile.new(name)
+		profiles[name] = p
+	end
+	Karet.Profile = p
+	return p
+end
 
 -- Config the server stashes (rate limiting etc. land in a later layer).
 Karet.Config = {}
@@ -205,12 +221,21 @@ end
 local function startClient(options: StartConfig)
 	if options.Theme ~= nil then
 		Karet.Theme.Set(options.Theme)
+	elseif Karet.Profile.CurrentTheme ~= "" then
+		Karet.Theme.Set(Karet.Profile.CurrentTheme)
 	end
 
 	local terminal = Terminal.new(options :: any)
 	terminal:mount()
+	-- back the input history with the profile so it sticks around
+	terminal.input.history = Karet.Profile.History
 	if options.Toggle then
-		terminal:enableSwitch(options.Toggle)
+		local ok, err = pcall(function()
+			terminal:enableSwitch(options.Toggle)
+		end)
+		if not ok then
+			warn("karet: couldnt bind the toggle key - " .. tostring(err))
+		end
 	end
 
 	-- Built-in commands (help/clear/echo/theme/...), unless opted out.
@@ -221,6 +246,7 @@ local function startClient(options: StartConfig)
 			end,
 			setTheme = function(name)
 				Karet.Theme.Set(name)
+				Karet.Profile.CurrentTheme = name
 			end,
 			listThemes = function()
 				return Karet.Theme.List()
@@ -234,6 +260,9 @@ local function startClient(options: StartConfig)
 			playerName = function()
 				local p = Players.LocalPlayer
 				return p and p.Name or "client"
+			end,
+			editor = function()
+				return Karet.Editor
 			end,
 			version = Karet.Version,
 		}
