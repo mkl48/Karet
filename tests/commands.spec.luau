@@ -12,8 +12,9 @@ local Types = fw.get("Types")
 local Host = fw.get("Host")
 local Commands = fw.get("Commands")
 
--- Build a rig with the built-ins registered and stub services.
-local function rig()
+-- Build a rig with the built-ins registered and stub services. Pass a `ui` table to
+-- exercise the rich-output path (commands branch on ctx.UI.available).
+local function rig(ui)
 	local registry = Registry.new()
 	local state = { cleared = false, theme = nil :: string? }
 	local services = {
@@ -51,6 +52,7 @@ local function rig()
 		end,
 		hooks = { pre = {}, post = {}, onErr = {} },
 		auth = { defaultRole = "User", allowed = {}, denied = {} },
+		ui = ui,
 	})
 	local ev = Evaluator.new(host)
 	return {
@@ -132,5 +134,35 @@ return function(t)
 		local k = rig()
 		k.run("cls")
 		Assert.truthy(k.state.cleared, "alias ran clear")
+	end)
+
+	-- when ctx.UI is available (a terminal), list commands render a table instead of text
+	local function capturingUI()
+		local calls = { tables = {} }
+		return setmetatable({
+			available = true,
+			Table = function(opts)
+				table.insert(calls.tables, opts)
+			end,
+		}, { __index = function()
+			return function() end
+		end }),
+			calls
+	end
+
+	t.test("help renders a command table when UI is available", function()
+		local ui, calls = capturingUI()
+		local k = rig(ui)
+		k.run("help")
+		Assert.eq(#calls.tables, 1, "one table drawn")
+		Assert.truthy(calls.tables[1].headers[1] == "command", "command column")
+		Assert.truthy(#calls.tables[1].rows > 0, "has rows")
+	end)
+
+	t.test("themes renders a table when UI is available", function()
+		local ui, calls = capturingUI()
+		local k = rig(ui)
+		k.run("themes")
+		Assert.eq(#calls.tables, 1, "themes table drawn")
 	end)
 end

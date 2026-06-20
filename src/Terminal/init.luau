@@ -531,6 +531,7 @@ function Terminal:ui(): { [string]: any }
 		end
 	end
 	return {
+		available = true, -- lets commands branch: rich table on the terminal, plain text off it
 		Markup = function(rich: string, group: string?)
 			t:printRich(rich, group)
 		end,

@@ -857,6 +857,7 @@ function Commands.build(services: Services): { any }
 			Args = { { Name = "command", Types = { "String" }, Required = false } },
 			On = {
 				Client = function(ctx)
+					local rich = ctx.UI.available == true
 					local which = ctx.Args.command
 					if which then
 						local def = services.get(which)
@@ -864,13 +865,37 @@ function Commands.build(services: Services): { any }
 							return ctx.Err(`no command '{which}'`)
 						end
 						ctx.Print(`{def.Name}{def.Description and " - " .. def.Description or ""}`)
-						for _, arg in def.Args or {} do
-							local opt = arg.Required and "" or "?"
-							ctx.Info(`  <{arg.Name}{opt}> : {table.concat(arg.Types, " | ")}`)
+						if rich then
+							if def.Args and #def.Args > 0 then
+								local rows = {}
+								for _, arg in def.Args do
+									table.insert(rows, { `<{arg.Name}{arg.Required and "" or "?"}>`, table.concat(arg.Types, " | ") })
+								end
+								ctx.UI.Table({ headers = { "argument", "types" }, rows = rows })
+							end
+							if def.Attributes and #def.Attributes > 0 then
+								local rows = {}
+								for _, attr in def.Attributes do
+									table.insert(rows, { "-" .. (attr.Short or attr.Name), attr.Description or attr.Name })
+								end
+								ctx.UI.Table({ headers = { "flag", "description" }, rows = rows })
+							end
+						else
+							for _, arg in def.Args or {} do
+								ctx.Info(`  <{arg.Name}{arg.Required and "" or "?"}> : {table.concat(arg.Types, " | ")}`)
+							end
+							for _, attr in def.Attributes or {} do
+								ctx.Info(`  -{attr.Short or attr.Name}  {attr.Description or attr.Name}`)
+							end
 						end
-						for _, attr in def.Attributes or {} do
-							ctx.Info(`  -{attr.Short or attr.Name}  {attr.Description or attr.Name}`)
+					elseif rich then
+						local rows = {}
+						for _, name in services.list() do
+							local d = services.get(name)
+							table.insert(rows, { name, (d and d.Description) or "" })
 						end
+						ctx.UI.Table({ headers = { "command", "description" }, rows = rows })
+						ctx.Info("type  help <command>  for details")
 					else
 						ctx.Print("commands: " .. table.concat(services.list(), ", "))
 						ctx.Info("type  help <command>  for details")
@@ -885,7 +910,16 @@ function Commands.build(services: Services): { any }
 			Description = "list every registered command",
 			Network = "Client",
 			On = { Client = function(ctx)
-				ctx.Print(table.concat(services.list(), ", "))
+				if ctx.UI.available == true then
+					local rows = {}
+					for _, name in services.list() do
+						local d = services.get(name)
+						table.insert(rows, { name, (d and d.Description) or "" })
+					end
+					ctx.UI.Table({ headers = { "command", "description" }, rows = rows })
+				else
+					ctx.Print(table.concat(services.list(), ", "))
+				end
 			end },
 		},
 
@@ -969,7 +1003,16 @@ function Commands.build(services: Services): { any }
 			Description = "list the available themes",
 			Network = "Client",
 			On = { Client = function(ctx)
-				ctx.Print(table.concat(services.listThemes(), ", "))
+				local names = services.listThemes()
+				if ctx.UI.available == true then
+					local rows = {}
+					for _, name in names do
+						table.insert(rows, { name })
+					end
+					ctx.UI.Table({ headers = { "theme" }, rows = rows })
+				else
+					ctx.Print(table.concat(names, ", "))
+				end
 			end },
 		},
 
@@ -1101,7 +1144,13 @@ function Commands.build(services: Services): { any }
 				for _, n in names do
 					table.insert(rows, { "@" .. n, tostring(services.env.get(n)) })
 				end
-				ctx.UI.Fields(rows)
+				if ctx.UI.available == true then
+					ctx.UI.Table({ headers = { "variable", "value" }, rows = rows })
+				else
+					for _, r in rows do
+						ctx.Print(`{r[1]} = {r[2]}`)
+					end
+				end
 			end },
 		},
 
@@ -1118,8 +1167,17 @@ function Commands.build(services: Services): { any }
 				if n == 0 then
 					return ctx.Info("no history yet")
 				end
-				for i = math.max(1, n - 19), n do
-					ctx.Print(`{i}  {hist[i]}`)
+				local start = math.max(1, n - 19)
+				if ctx.UI.available == true then
+					local rows = {}
+					for i = start, n do
+						table.insert(rows, { tostring(i), hist[i] })
+					end
+					ctx.UI.Table({ headers = { "#", "command" }, rows = rows })
+				else
+					for i = start, n do
+						ctx.Print(`{i}  {hist[i]}`)
+					end
 				end
 			end },
 		},
@@ -1130,26 +1188,28 @@ function Commands.build(services: Services): { any }
 			Description = "system info card, karet style",
 			Network = "Client",
 			On = { Client = function(ctx)
-				local R = ctx.UI.Render
-				local logo = table.concat({
-					" __  __ ",
-					"| |/ /  ",
-					"| ' /   ",
-					"| . \\   ",
-					"|_|\\_\\  ",
-				}, "\n")
-				local fields = R and R.fields({
+				local specs = {
 					{ "user", services.playerName() },
 					{ "shell", "karet " .. services.version },
 					{ "cmds", tostring(#services.list()) },
 					{ "vars", tostring(services.env and #services.env.list() or 0) },
 					{ "themes", tostring(#services.listThemes()) },
 					{ "uptime", string.format("%ds", math.floor(time())) },
-				})
-				if R then
-					ctx.UI.Markup(R.columns({ R.color(logo, "Accent"), fields }, { gap = 3 }))
+				}
+				if ctx.UI.available == true then
+					local R = ctx.UI.Render
+					local logo = table.concat({
+						" __  __ ",
+						"| |/ /  ",
+						"| ' /   ",
+						"| . \\   ",
+						"|_|\\_\\  ",
+					}, "\n")
+					ctx.UI.Markup(R.columns({ R.color(logo, "Accent"), R.fields(specs) }, { gap = 3 }))
 				else
-					ctx.Print("karet " .. services.version)
+					for _, kv in specs do
+						ctx.Print(`{kv[1]}: {kv[2]}`)
+					end
 				end
 			end },
 		},
@@ -1160,15 +1220,24 @@ function Commands.build(services: Services): { any }
 			Description = "list players in the server",
 			Network = "Client",
 			On = { Client = function(ctx)
-				local names = {}
-				for _, p in game:GetService("Players"):GetPlayers() do
-					table.insert(names, p.Name)
-				end
-				if #names == 0 then
+				local plrs = game:GetService("Players"):GetPlayers()
+				if #plrs == 0 then
 					return ctx.Info("no players")
 				end
-				ctx.Print(table.concat(names, ", "))
-				ctx.Return(#names)
+				if ctx.UI.available == true then
+					local rows = {}
+					for _, p in plrs do
+						table.insert(rows, { p.Name, p.DisplayName, tostring(p.UserId) })
+					end
+					ctx.UI.Table({ headers = { "name", "display", "userid" }, rows = rows })
+				else
+					local names = {}
+					for _, p in plrs do
+						table.insert(names, p.Name)
+					end
+					ctx.Print(table.concat(names, ", "))
+				end
+				ctx.Return(#plrs)
 			end },
 		},
 
@@ -30321,6 +30390,7 @@ function Terminal:ui(): { [string]: any }
 		end
 	end
 	return {
+		available = true, -- lets commands branch: rich table on the terminal, plain text off it
 		Markup = function(rich: string, group: string?)
 			t:printRich(rich, group)
 		end,
