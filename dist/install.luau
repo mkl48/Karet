@@ -16221,6 +16221,25 @@ function Lexer.tokenize(source: string): LexResult
 		spaceBefore = false
 	end
 
+	-- does the char at p keep a bareword going. lets us lex things like 1,200,1 (vectors),
+	-- a,b,c (player lists) and 1.5,2,3 as one token instead of choking on the comma
+	local function continues(p: number, allowDot: boolean): boolean
+		local c = string.byte(source, p)
+		if isAlphaNum(c) then
+			return true
+		end
+		if c == 45 and isAlpha(string.byte(source, p + 1)) then
+			return true -- internal -letter, eg Ignore-Errors
+		end
+		if c == 44 and isAlphaNum(string.byte(source, p + 1)) then
+			return true -- comma seperated list
+		end
+		if allowDot and c == 46 and isDigit(string.byte(source, p + 1)) then
+			return true -- decimal inside a coord
+		end
+		return false
+	end
+
 	while i <= n do
 		local b = string.byte(source, i)
 
@@ -16245,26 +16264,21 @@ function Lexer.tokenize(source: string): LexResult
 			while isDigit(string.byte(source, i)) do
 				i += 1
 			end
-			if isAlpha(string.byte(source, i)) then
-				while true do
-					local c = string.byte(source, i)
-					if isAlphaNum(c) then
-						i += 1
-					elseif c == 45 and isAlpha(string.byte(source, i + 1)) then
-						i += 1
-					else
-						break
-					end
+			-- optional decimal part
+			if string.byte(source, i) == 46 and isDigit(string.byte(source, i + 1)) then
+				i += 1
+				while isDigit(string.byte(source, i)) do
+					i += 1
+				end
+			end
+			-- if a letter or comma list follows its a bareword (1d, 30s, 1,200,1, 1.5,2,3)
+			if continues(i, true) then
+				while continues(i, true) do
+					i += 1
 				end
 				local text = string.sub(source, startPos, i - 1)
 				push(Kind.Ident, text, text, startPos)
 			else
-				if string.byte(source, i) == 46 and isDigit(string.byte(source, i + 1)) then
-					i += 1
-					while isDigit(string.byte(source, i)) do
-						i += 1
-					end
-				end
 				local text = string.sub(source, startPos, i - 1)
 				push(Kind.Number, text, tonumber(text), startPos)
 			end
@@ -16273,15 +16287,8 @@ function Lexer.tokenize(source: string): LexResult
 			-- `Ignore-Errors` is one ident but `x-2` splits into x, -, 2.
 			local startPos = i
 			i += 1
-			while true do
-				local c = string.byte(source, i)
-				if isAlphaNum(c) then
-					i += 1
-				elseif c == 45 and isAlpha(string.byte(source, i + 1)) then
-					i += 1
-				else
-					break
-				end
+			while continues(i, false) do
+				i += 1
 			end
 			local text = string.sub(source, startPos, i - 1)
 			if text == "true" then
@@ -26585,7 +26592,8 @@ local BUILTINS: { [string]: Definition } = {
 			if typeof(raw) == "Vector3" then
 				return raw, nil
 			end
-			local x, y, z = string.match(tostring(raw), "^(-?%d+%.?%d*),(-?%d+%.?%d*),(-?%d+%.?%d*)$")
+			local s = string.gsub(tostring(raw), "%s", "")
+			local x, y, z = string.match(s, "^(-?%d+%.?%d*),(-?%d+%.?%d*),(-?%d+%.?%d*)$")
 			if not x then
 				return nil, `'{tostring(raw)}' is not an x,y,z vector`
 			end
@@ -26593,6 +26601,9 @@ local BUILTINS: { [string]: Definition } = {
 		end,
 		Validate = function(v)
 			return typeof(v) == "Vector3" or "expected a Vector3"
+		end,
+		Autocomplete = function()
+			return { "0,0,0" }
 		end,
 	},
 }

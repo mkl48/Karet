@@ -109,4 +109,21 @@ return function(t)
 		local c = Lexer.tokenize("a ` b")
 		Assert.truthy(#c.diagnostics >= 1, "backtick flagged as unexpected")
 	end)
+
+	t.test("comma lists lex as one bareword (vectors, player lists)", function()
+		local v = Lexer.tokenize("tp Kr 1,200,1")
+		Assert.eq(#v.diagnostics, 0, "no comma diagnostics")
+		Assert.eq(v.tokens[3].kind, "Ident", "the vector is one ident")
+		Assert.eq(v.tokens[3].value, "1,200,1", "whole vector token")
+
+		local dec = Lexer.tokenize("1.5,2,3")
+		Assert.eq(dec.tokens[1].value, "1.5,2,3", "decimals inside a coord")
+
+		local list = Lexer.tokenize("kick a,b,c")
+		Assert.eq(list.tokens[2].value, "a,b,c", "player list is one token")
+
+		-- regression: a bare number is still a Number, and x-2 still splits
+		Assert.eq(Lexer.tokenize("5").tokens[1].kind, "Number", "plain number unchanged")
+		Assert.eq(kinds(Lexer.tokenize("x-2")), { "Ident", "Minus", "Number", "EOF" }, "x-2 still splits")
+	end)
 end

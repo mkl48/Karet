@@ -245,7 +245,8 @@ local BUILTINS: { [string]: Definition } = {
 			if typeof(raw) == "Vector3" then
 				return raw, nil
 			end
-			local x, y, z = string.match(tostring(raw), "^(-?%d+%.?%d*),(-?%d+%.?%d*),(-?%d+%.?%d*)$")
+			local s = string.gsub(tostring(raw), "%s", "")
+			local x, y, z = string.match(s, "^(-?%d+%.?%d*),(-?%d+%.?%d*),(-?%d+%.?%d*)$")
 			if not x then
 				return nil, `'{tostring(raw)}' is not an x,y,z vector`
 			end
@@ -253,6 +254,9 @@ local BUILTINS: { [string]: Definition } = {
 		end,
 		Validate = function(v)
 			return typeof(v) == "Vector3" or "expected a Vector3"
+		end,
+		Autocomplete = function()
+			return { "0,0,0" }
 		end,
 	},
 }
