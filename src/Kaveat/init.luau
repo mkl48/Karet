@@ -8,6 +8,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 
 local Theme = require(script.Parent.Theme)
+local deps = require(script.Parent.deps)
 local create = require(script.Parent.Terminal.create)
 
 local Kaveat = {}
@@ -20,6 +21,24 @@ local TREE_W = 190
 local OUT_H = 130
 local TAB_H = 26
 local MODE_H = 22
+
+-- the : commands, used for the cmdline autocomplete
+local CMDS = {
+	{ name = "w", detail = "save" },
+	{ name = "q", detail = "close tab" },
+	{ name = "wq", detail = "save and close" },
+	{ name = "e", detail = "open file" },
+	{ name = "new", detail = "new file" },
+	{ name = "run", detail = "run buffer" },
+	{ name = "server", detail = "server context" },
+	{ name = "client", detail = "client context" },
+	{ name = "ls", detail = "list kavs" },
+	{ name = "close", detail = "close editor" },
+}
+
+local function rgb(c: Color3): string
+	return string.format("rgb(%d,%d,%d)", math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
+end
 
 export type Buffer = { name: string, context: string, source: string, dirty: boolean }
 
@@ -39,8 +58,18 @@ function Kaveat.new(opts: { [string]: any }?)
 	self.outH = OUT_H
 	self.outLines = {}
 	self._setting = false
+	self.cmdSuggestions = {}
+	self.cmdSel = 0
+	self.cmdSugLabels = {}
 
 	self:build(options)
+
+	-- syntax highlighting on the editor box (boatbombers highlighter, vendored)
+	local Highlighter = deps.Highlighter()
+	if Highlighter then
+		self.highlighter = Highlighter
+		self.hlCleanup = Highlighter.highlight({ textObject = self.box })
+	end
 
 	self.unsubscribeTheme = Theme.OnChanged(function(palette)
 		self:applyTheme(palette)
@@ -76,6 +105,7 @@ function Kaveat:build(options)
 		Font = FONT,
 		TextSize = 16,
 		Text = "x",
+		TextColor3 = Color3.fromRGB(130, 203, 255),
 	})
 	local topbar = create("Frame", {
 		Name = "TopBar",
@@ -266,6 +296,32 @@ function Kaveat:build(options)
 		Children = { create("UIStroke", { Thickness = 1 }), cmdBox },
 	})
 
+	-- cmdline autocomplete, sits just above the cmdline
+	local cmdStroke = create("UIStroke", { Thickness = 1 })
+	local cmdSug = create("Frame", {
+		Name = "CmdSug",
+		Visible = false,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 8, 0, -2),
+		Size = UDim2.fromOffset(320, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BorderSizePixel = 0,
+		ZIndex = 8,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			cmdStroke,
+			create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }),
+			create("UIPadding", {
+				PaddingTop = UDim.new(0, 4),
+				PaddingBottom = UDim.new(0, 4),
+				PaddingLeft = UDim.new(0, 6),
+				PaddingRight = UDim.new(0, 6),
+			}),
+		},
+		Parent = cmdline,
+	})
+	self.cmdSug, self.cmdStroke = cmdSug, cmdStroke
+
 	-- resize grip, bottom right corner
 	local grip = create("TextButton", {
 		Name = "Grip",
@@ -311,12 +367,12 @@ function Kaveat:build(options)
 	self.modeChip, self.ctxLabel, self.fileLabel, self.title = modeChip, ctxLabel, fileLabel, title
 	self.cmdline, self.cmdBox, self.treeDrag, self.outDrag = cmdline, cmdBox, treeDrag, outDrag
 
-	self.themed.bg = { window, tree, tabBar, output }
+	self.themed.bg = { window, tree, tabBar, output, cmdSug }
 	self.themed.surface = { topbar, modeline, cmdline }
 	self.themed.fg = { box }
 	self.themed.muted = { gutter, treeTitle, ctxLabel, fileLabel }
 	self.themed.accent = { title }
-	self.themed.border = { stroke, treeDrag, outDrag }
+	self.themed.border = { stroke, treeDrag, outDrag, cmdStroke }
 
 	box.Focused:Connect(function()
 		self.mode = "WRITE"
@@ -345,8 +401,12 @@ function Kaveat:build(options)
 	self:wireDrag(outDrag, "out")
 	self:wireWindow(topbar, grip)
 
+	cmdBox:GetPropertyChangedSignal("Text"):Connect(function()
+		self:cmdSuggest()
+	end)
 	cmdBox.FocusLost:Connect(function(enter)
 		self.cmdline.Visible = false
+		self:hideCmdSug()
 		local text = cmdBox.Text
 		cmdBox.Text = ""
 		if enter then
@@ -403,6 +463,21 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 		return
 	end
 
+	-- cmdline open: tab accepts, up/down move the suggestion (these are processed by the
+	-- cmd textbox so handle them before the processed guard)
+	if self.cmdline.Visible then
+		if key == Enum.KeyCode.Tab then
+			if #self.cmdSuggestions > 0 then
+				self:acceptCmdSug()
+			end
+		elseif key == Enum.KeyCode.Up then
+			self:moveCmdSel(-1)
+		elseif key == Enum.KeyCode.Down then
+			self:moveCmdSel(1)
+		end
+		return
+	end
+
 	if self.mode == "WRITE" then
 		if key == Enum.KeyCode.Escape then
 			self.box:ReleaseFocus()
@@ -410,7 +485,7 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 		return
 	end
 
-	-- READ mode, ignore keys eaten by another textbox (eg the cmdline)
+	-- READ mode, ignore keys eaten by another textbox
 	if processed then
 		return
 	end
@@ -419,7 +494,98 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 	elseif key == Enum.KeyCode.Semicolon and shift then
 		self.cmdline.Visible = true
 		self.cmdBox:CaptureFocus()
+		self:cmdSuggest()
 	end
+end
+
+-- cmdline autocomplete -----------------------------------------------------
+
+function Kaveat:cmdSuggest()
+	local text = self.cmdBox.Text
+	local word, rest = string.match(text, "^(%S*)(.*)$")
+	local out = {}
+	if rest == "" then
+		local p = string.lower(word)
+		for _, c in CMDS do
+			if string.sub(c.name, 1, #p) == p then
+				table.insert(out, { text = c.name, detail = c.detail, insert = c.name .. " " })
+			end
+		end
+	else
+		local cmd = string.lower(word)
+		if cmd == "e" or cmd == "edit" or cmd == "new" then
+			local partial = string.lower((string.gsub(rest, "^%s*", "")))
+			for _, name in self:listFiles() do
+				if string.sub(string.lower(name), 1, #partial) == partial then
+					table.insert(out, { text = name, detail = "kav", insert = word .. " " .. name })
+				end
+			end
+		end
+	end
+	self.cmdSuggestions = out
+	self.cmdSel = #out > 0 and 1 or 0
+	self:renderCmdSug()
+end
+
+function Kaveat:renderCmdSug()
+	for _, l in self.cmdSugLabels do
+		l:Destroy()
+	end
+	table.clear(self.cmdSugLabels)
+	local show = self.cmdline.Visible and #self.cmdSuggestions > 0
+	self.cmdSug.Visible = show
+	if not show then
+		return
+	end
+	local p = self.palette
+	local fg = (p and p.Foreground) or Color3.new(1, 1, 1)
+	local muted = (p and p.Muted) or Color3.fromRGB(120, 120, 120)
+	local sel = (p and p.Selection) or Color3.fromRGB(60, 60, 80)
+	for i, s in self.cmdSuggestions do
+		if i > 8 then
+			break
+		end
+		local label = create("TextLabel", {
+			Name = "S",
+			BackgroundColor3 = sel,
+			BackgroundTransparency = i == self.cmdSel and 0 or 1,
+			Size = UDim2.new(1, 0, 0, 18),
+			Font = FONT,
+			TextSize = 13,
+			RichText = true,
+			Text = `{s.text}  <font color="{rgb(muted)}" size="11">{s.detail}</font>`,
+			TextColor3 = fg,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = i,
+			ZIndex = 9,
+			Parent = self.cmdSug,
+		})
+		table.insert(self.cmdSugLabels, label)
+	end
+end
+
+function Kaveat:moveCmdSel(d: number)
+	local n = math.min(#self.cmdSuggestions, 8)
+	if n == 0 then
+		return
+	end
+	self.cmdSel = ((self.cmdSel - 1 + d) % n) + 1
+	self:renderCmdSug()
+end
+
+function Kaveat:acceptCmdSug()
+	local s = self.cmdSuggestions[self.cmdSel]
+	if not s then
+		return
+	end
+	self.cmdBox.Text = s.insert
+	self.cmdBox.CursorPosition = #s.insert + 1
+end
+
+function Kaveat:hideCmdSug()
+	self.cmdSuggestions = {}
+	self.cmdSel = 0
+	self:renderCmdSug()
 end
 
 function Kaveat:runCmd(text: string)
@@ -796,6 +962,18 @@ function Kaveat:applyTheme(palette: { [string]: Color3 })
 	end
 	self.cmdBox.TextColor3 = palette.Foreground
 	self.cmdBox.PlaceholderColor3 = palette.Muted
+	if self.highlighter then
+		self.highlighter.setTokenColors({
+			background = palette.Background,
+			iden = palette.Foreground,
+			keyword = palette.Keyword,
+			builtin = palette.Type,
+			string = palette.String,
+			number = palette.Number,
+			comment = palette.Comment,
+			operator = palette.Operator,
+		})
+	end
 	self:refreshMode()
 	self:refreshTree()
 	self:refreshTabs()
@@ -807,6 +985,9 @@ function Kaveat:destroy()
 	end
 	if self.inputConn then
 		self.inputConn:Disconnect()
+	end
+	if self.hlCleanup then
+		self.hlCleanup()
 	end
 	self.gui:Destroy()
 end

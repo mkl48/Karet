@@ -967,6 +967,1502 @@ end
 
 return Context
 ]])
+local _6 = mod("Highlighter", _1, [=[
+local types = require(script.types)
+local utility = require(script.utility)
+local theme = require(script.theme)
+
+local Highlighter = {
+	defaultLexer = require(script.lexer) :: types.Lexer,
+
+	_textObjectData = {} :: { [types.TextObject]: types.ObjectData },
+	_cleanups = {} :: { [types.TextObject]: () -> () },
+}
+
+--[[
+	Gathers the info that is needed in order to set up a line label.
+]]
+function Highlighter._getLabelingInfo(textObject: types.TextObject)
+	local data = Highlighter._textObjectData[textObject]
+	if not data then
+		return
+	end
+
+	local src = utility.convertTabsToSpaces(utility.removeControlChars(textObject.Text))
+	local numLines = #string.split(src, "\n")
+	if numLines == 0 then
+		return
+	end
+
+	local textBounds = utility.getTextBounds(textObject)
+	local textHeight = textBounds.Y / numLines
+
+	return {
+		data = data,
+		numLines = numLines,
+		textBounds = textBounds,
+		textHeight = textHeight,
+		innerAbsoluteSize = utility.getInnerAbsoluteSize(textObject),
+		textColor = theme.getColor("iden"),
+		textFont = textObject.FontFace,
+		textSize = textObject.TextSize,
+		labelSize = UDim2.new(1, 0, 0, math.ceil(textHeight)),
+	}
+end
+
+--[[
+	Aligns and matches the line labels to the textObject.
+]]
+function Highlighter._alignLabels(textObject: types.TextObject)
+	local labelingInfo = Highlighter._getLabelingInfo(textObject)
+	if not labelingInfo then
+		return
+	end
+
+	for lineNumber, lineLabel in labelingInfo.data.Labels do
+		-- Align line label
+		lineLabel.TextColor3 = labelingInfo.textColor
+		lineLabel.FontFace = labelingInfo.textFont
+		lineLabel.TextSize = labelingInfo.textSize
+		lineLabel.Size = labelingInfo.labelSize
+		lineLabel.Position =
+			UDim2.fromScale(0, labelingInfo.textHeight * (lineNumber - 1) / labelingInfo.innerAbsoluteSize.Y)
+	end
+end
+
+--[[
+	Creates and populates the line labels with the appropriate rich text.
+]]
+function Highlighter._populateLabels(props: types.HighlightProps)
+	-- Gather props
+	local textObject = props.textObject
+	local src = utility.convertTabsToSpaces(utility.removeControlChars(props.src or textObject.Text))
+	local lexer = props.lexer or Highlighter.defaultLexer
+	local customLang = props.customLang
+	local forceUpdate = props.forceUpdate
+
+	-- Avoid updating when unnecessary
+	local data = Highlighter._textObjectData[textObject]
+	if (data == nil) or (data.Text == src) then
+		if forceUpdate ~= true then
+			return
+		end
+	end
+
+	-- Ensure textObject matches sanitized src
+	textObject.Text = src
+
+	local lineLabels = data.Labels
+	local previousLines = data.Lines
+
+	local lines = string.split(src, "\n")
+
+	data.Lines = lines
+	data.Text = src
+	data.Lexer = lexer
+	data.CustomLang = customLang
+
+	-- Shortcut empty textObjects
+	if src == "" then
+		for l = 1, #lineLabels do
+			if lineLabels[l].Text == "" then
+				continue
+			end
+			lineLabels[l].Text = ""
+		end
+		return
+	end
+
+	local idenColor = theme.getColor("iden")
+	local labelingInfo = Highlighter._getLabelingInfo(textObject)
+
+	local richTextBuffer, bufferIndex, lineNumber = table.create(5), 0, 1
+	for token: types.TokenName, content: string in lexer.scan(src) do
+		local Color = if customLang and customLang[content]
+			then theme.getColor("custom")
+			else theme.getColor(token) or idenColor
+
+		local tokenLines = string.split(utility.sanitizeRichText(content), "\n")
+
+		for l, tokenLine in tokenLines do
+			-- Find line label
+			local lineLabel = lineLabels[lineNumber]
+			if not lineLabel then
+				local newLabel = Instance.new("TextLabel")
+				newLabel.Name = "Line_" .. lineNumber
+				newLabel.AutoLocalize = false
+				newLabel.RichText = true
+				newLabel.BackgroundTransparency = 1
+				newLabel.Text = ""
+				newLabel.TextXAlignment = Enum.TextXAlignment.Left
+				newLabel.TextYAlignment = Enum.TextYAlignment.Top
+				newLabel.TextColor3 = labelingInfo.textColor
+				newLabel.FontFace = labelingInfo.textFont
+				newLabel.TextSize = labelingInfo.textSize
+				newLabel.Size = labelingInfo.labelSize
+				newLabel.Position =
+					UDim2.fromScale(0, labelingInfo.textHeight * (lineNumber - 1) / labelingInfo.innerAbsoluteSize.Y)
+
+				newLabel.Parent = textObject.SyntaxHighlights
+				lineLabels[lineNumber] = newLabel
+				lineLabel = newLabel
+			end
+
+			-- If multiline token, then set line & move to next
+			if l > 1 then
+				if forceUpdate or lines[lineNumber] ~= previousLines[lineNumber] then
+					-- Set line
+					lineLabels[lineNumber].Text = table.concat(richTextBuffer)
+				end
+				-- Move to next line
+				lineNumber += 1
+				bufferIndex = 0
+				table.clear(richTextBuffer)
+			end
+
+			-- If changed, add token to line
+			if forceUpdate or lines[lineNumber] ~= previousLines[lineNumber] then
+				bufferIndex += 1
+				-- Only add RichText tags when the color is non-default and the characters are non-whitespace
+				if Color ~= idenColor and string.find(tokenLine, "[%S%C]") then
+					richTextBuffer[bufferIndex] = theme.getColoredRichText(Color, tokenLine)
+				else
+					richTextBuffer[bufferIndex] = tokenLine
+				end
+			end
+		end
+	end
+
+	-- Set final line
+	if richTextBuffer[1] and lineLabels[lineNumber] then
+		lineLabels[lineNumber].Text = table.concat(richTextBuffer)
+	end
+
+	-- Clear unused line labels
+	for l = lineNumber + 1, #lineLabels do
+		if lineLabels[l].Text == "" then
+			continue
+		end
+		lineLabels[l].Text = ""
+	end
+end
+
+--[[
+	Builds rich text lines from the given source code.
+	Useful for cases where you want to render the labels yourself for something.
+]]
+function Highlighter.buildRichTextLines(props: types.BuildRichTextLinesProps): { string }
+	-- Gather props
+	local src = utility.convertTabsToSpaces(utility.removeControlChars(props.src))
+	local lexer = props.lexer or Highlighter.defaultLexer
+	local customLang = props.customLang
+	local idenColor = theme.getColor("iden")
+
+	local richTextLines = table.create(select(2, string.gsub(src, "\n", "\n")) + 1)
+	local richTextBuffer, bufferIndex = table.create(5), 0
+	local lineNumber = 1
+
+	for token: types.TokenName, content: string in lexer.scan(src) do
+		local Color = if customLang and customLang[content]
+			then theme.getColor("custom")
+			else theme.getColor(token) or idenColor
+
+		local tokenLines = string.split(utility.sanitizeRichText(content), "\n")
+
+		for l, tokenLine in tokenLines do
+			-- If multiline token, then set line & move to next
+			if l > 1 then
+				-- Set line
+				richTextLines[lineNumber] = table.concat(richTextBuffer)
+				-- Move to next line
+				lineNumber += 1
+				bufferIndex = 0
+				table.clear(richTextBuffer)
+			end
+
+			bufferIndex += 1
+			-- Only add RichText tags when the characters are non-whitespace
+			if string.find(tokenLine, "[%S%C]") then
+				richTextBuffer[bufferIndex] = theme.getColoredRichText(Color, tokenLine)
+			else
+				richTextBuffer[bufferIndex] = tokenLine
+			end
+		end
+	end
+
+	-- Set final line
+	richTextLines[lineNumber] = table.concat(richTextBuffer)
+
+	return richTextLines
+end
+
+--[[
+	Highlights the given textObject with the given props and returns a cleanup function.
+	Highlighting will automatically update when needed, so the cleanup function will disconnect
+	those connections and remove all labels.
+]]
+function Highlighter.highlight(props: types.HighlightProps): () -> ()
+	-- Gather props
+	local textObject = props.textObject
+	local src = utility.convertTabsToSpaces(utility.removeControlChars(props.src or textObject.Text))
+	local lexer = props.lexer or Highlighter.defaultLexer
+	local customLang = props.customLang
+
+	-- Avoid updating when unnecessary
+	if Highlighter._cleanups[textObject] then
+		-- Already been initialized, so just update
+		Highlighter._populateLabels(props)
+		Highlighter._alignLabels(textObject)
+		return Highlighter._cleanups[textObject]
+	end
+
+	-- Ensure valid object properties
+	textObject.RichText = false
+	textObject.Text = src
+	textObject.TextXAlignment = Enum.TextXAlignment.Left
+	textObject.TextYAlignment = Enum.TextYAlignment.Top
+	textObject.BackgroundColor3 = theme.getColor("background")
+	textObject.TextColor3 = theme.getColor("iden")
+	textObject.TextTransparency = 0.5
+
+	-- Build the highlight labels
+	local lineFolder = textObject:FindFirstChild("SyntaxHighlights")
+	if lineFolder == nil then
+		local newLineFolder = Instance.new("Folder")
+		newLineFolder.Name = "SyntaxHighlights"
+		newLineFolder.Parent = textObject
+
+		lineFolder = newLineFolder
+	end
+
+	local data = {
+		Text = "",
+		Labels = {},
+		Lines = {},
+		Lexer = lexer,
+		CustomLang = customLang,
+	}
+	Highlighter._textObjectData[textObject] = data
+
+	-- Add a cleanup handler for this textObject
+	local connections: { [string]: RBXScriptConnection } = {}
+	local function cleanup()
+		lineFolder:Destroy()
+
+		Highlighter._textObjectData[textObject] = nil
+		Highlighter._cleanups[textObject] = nil
+
+		for _key, connection in connections do
+			connection:Disconnect()
+		end
+		table.clear(connections)
+	end
+	Highlighter._cleanups[textObject] = cleanup
+
+	connections["AncestryChanged"] = textObject.AncestryChanged:Connect(function()
+		if textObject.Parent then
+			return
+		end
+
+		cleanup()
+	end)
+	connections["TextChanged"] = textObject:GetPropertyChangedSignal("Text"):Connect(function()
+		Highlighter._populateLabels(props)
+	end)
+	connections["TextBoundsChanged"] = textObject:GetPropertyChangedSignal("TextBounds"):Connect(function()
+		Highlighter._alignLabels(textObject)
+	end)
+	connections["AbsoluteSizeChanged"] = textObject:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		Highlighter._alignLabels(textObject)
+	end)
+	connections["FontFaceChanged"] = textObject:GetPropertyChangedSignal("FontFace"):Connect(function()
+		Highlighter._alignLabels(textObject)
+	end)
+
+	-- Populate the labels
+	Highlighter._populateLabels(props)
+	Highlighter._alignLabels(textObject)
+
+	return cleanup
+end
+
+--[[
+	Refreshes all highlighted textObjects. Used when the theme changes.
+]]
+function Highlighter.refresh(): ()
+	-- Rehighlight existing labels using latest colors
+	for textObject, data in Highlighter._textObjectData do
+		for _, lineLabel in data.Labels do
+			lineLabel.TextColor3 = theme.getColor("iden")
+		end
+
+		Highlighter.highlight({
+			textObject = textObject,
+			forceUpdate = true,
+			src = data.Text,
+			lexer = data.Lexer,
+			customLang = data.CustomLang,
+		})
+	end
+end
+
+--[[
+	Sets the token colors to the given colors and refreshes all highlighted textObjects.
+]]
+function Highlighter.setTokenColors(colors: types.TokenColors): ()
+	theme.setColors(colors)
+
+	Highlighter.refresh()
+end
+
+--[[
+	Gets a token color by name.
+	Mainly useful for setting "background" token color on other UI objects behind your text.
+]]
+function Highlighter.getTokenColor(tokenName: types.TokenName): Color3
+	return theme.getColor(tokenName)
+end
+
+--[[
+	Matches the token colors to the Studio theme settings and refreshes all highlighted textObjects.
+	Does nothing when not run in a Studio plugin.
+]]
+function Highlighter.matchStudioSettings(): ()
+	local applied = theme.matchStudioSettings(Highlighter.refresh)
+	if applied then
+		Highlighter.refresh()
+	end
+end
+
+return Highlighter
+]=])
+local _7 = mod("lexer", _6, [==[
+--[=[
+	Lexical scanner for creating a sequence of tokens from Lua source code.
+	This is a heavily modified and Roblox-optimized version of
+	the original Penlight Lexer module:
+		https://github.com/stevedonovan/Penlight
+	Authors:
+		stevedonovan <https://github.com/stevedonovan> ----------- Original Penlight lexer author
+		ryanjmulder <https://github.com/ryanjmulder> ------------- Penlight lexer contributer
+		mpeterv <https://github.com/mpeterv> --------------------- Penlight lexer contributer
+		Tieske <https://github.com/Tieske> ----------------------- Penlight lexer contributer
+		boatbomber <https://github.com/boatbomber> --------------- Roblox port, added builtin token,
+		                                                           added patterns for incomplete syntax, bug fixes,
+		                                                           behavior changes, token optimization, thread optimization
+		                                                           Added lexer.navigator() for non-sequential reads
+		Sleitnick <https://github.com/Sleitnick> ----------------- Roblox optimizations
+		howmanysmall <https://github.com/howmanysmall> ----------- Lua + Roblox optimizations
+
+	List of possible tokens:
+		- iden
+		- keyword
+		- builtin
+		- string
+		- number
+		- comment
+		- operator
+--]=]
+
+local lexer = {}
+
+local Prefix, Suffix, Cleaner = "^[%c%s]*", "[%c%s]*", "[%c%s]+"
+local UNICODE = "[%z\x01-\x7F\xC2-\xF4][\x80-\xBF]+"
+local NUMBER_A = "0[xX][%da-fA-F_]+"
+local NUMBER_B = "0[bB][01_]+"
+local NUMBER_C = "%d+%.?%d*[eE][%+%-]?%d+"
+local NUMBER_D = "%d+[%._]?[%d_eE]*"
+local OPERATORS = "[:;<>/~%*%(%)%-={},%.#%^%+%%]+"
+local BRACKETS = "[%[%]]+" -- needs to be separate pattern from other operators or it'll mess up multiline strings
+local IDEN = "[%a_][%w_]*"
+local STRING_EMPTY = "(['\"])%1" --Empty String
+local STRING_PLAIN = "(['\"])[^\n]-([^\\]%1)" --TODO: Handle escaping escapes
+local STRING_INTER = "`[^\n]-`"
+local STRING_INCOMP_A = "(['\"]).-\n" --Incompleted String with next line
+local STRING_INCOMP_B = "(['\"])[^\n]*" --Incompleted String without next line
+local STRING_MULTI = "%[(=*)%[.-%]%1%]" --Multiline-String
+local STRING_MULTI_INCOMP = "%[=*%[.-.*" --Incompleted Multiline-String
+local COMMENT_MULTI = "%-%-%[(=*)%[.-%]%1%]" --Completed Multiline-Comment
+local COMMENT_MULTI_INCOMP = "%-%-%[=*%[.-.*" --Incompleted Multiline-Comment
+local COMMENT_PLAIN = "%-%-.-\n" --Completed Singleline-Comment
+local COMMENT_INCOMP = "%-%-.*" --Incompleted Singleline-Comment
+-- local TYPED_VAR = ":%s*([%w%?%| \t]+%s*)" --Typed variable, parameter, function
+
+local lang = require(script.language)
+local lua_keyword = lang.keyword
+local lua_builtin = lang.builtin
+local lua_libraries = lang.libraries
+
+lexer.language = lang
+
+local lua_matches = {
+	-- Indentifiers
+	{ Prefix .. IDEN .. Suffix, "var" },
+
+	-- Numbers
+	{ Prefix .. NUMBER_A .. Suffix, "number" },
+	{ Prefix .. NUMBER_B .. Suffix, "number" },
+	{ Prefix .. NUMBER_C .. Suffix, "number" },
+	{ Prefix .. NUMBER_D .. Suffix, "number" },
+
+	-- Strings
+	{ Prefix .. STRING_EMPTY .. Suffix, "string" },
+	{ Prefix .. STRING_PLAIN .. Suffix, "string" },
+	{ Prefix .. STRING_INCOMP_A .. Suffix, "string" },
+	{ Prefix .. STRING_INCOMP_B .. Suffix, "string" },
+	{ Prefix .. STRING_MULTI .. Suffix, "string" },
+	{ Prefix .. STRING_MULTI_INCOMP .. Suffix, "string" },
+	{ Prefix .. STRING_INTER .. Suffix, "string_inter" },
+
+	-- Comments
+	{ Prefix .. COMMENT_MULTI .. Suffix, "comment" },
+	{ Prefix .. COMMENT_MULTI_INCOMP .. Suffix, "comment" },
+	{ Prefix .. COMMENT_PLAIN .. Suffix, "comment" },
+	{ Prefix .. COMMENT_INCOMP .. Suffix, "comment" },
+
+	-- Operators
+	{ Prefix .. OPERATORS .. Suffix, "operator" },
+	{ Prefix .. BRACKETS .. Suffix, "operator" },
+
+	-- Unicode
+	{ Prefix .. UNICODE .. Suffix, "iden" },
+
+	-- Unknown
+	{ "^.", "iden" },
+}
+
+-- To reduce the amount of table indexing during lexing, we separate the matches now
+local PATTERNS, TOKENS = {}, {}
+for i, m in lua_matches do
+	PATTERNS[i] = m[1]
+	TOKENS[i] = m[2]
+end
+
+--- Create a plain token iterator from a string.
+-- @tparam string s a string.
+-- @tparam number? startIndex a start index, assumed to be properly aligned to the tokens.
+
+function lexer.scan(s: string, startIndex: number?)
+	local index = startIndex or 1
+	local size = #s
+	local previousContent1, previousContent2, previousContent3, previousToken = "", "", "", ""
+
+	local thread = coroutine.create(function()
+		while index <= size do
+			local matched = false
+			for tokenType, pattern in ipairs(PATTERNS) do
+				-- Find match
+				local start, finish = string.find(s, pattern, index)
+				if start == nil then
+					continue
+				end
+
+				-- Move head
+				index = finish + 1
+				matched = true
+
+				-- Gather results
+				local content = string.sub(s, start, finish)
+				local rawToken = TOKENS[tokenType]
+				local processedToken = rawToken
+
+				-- Process token
+				if rawToken == "var" then
+					-- Since we merge spaces into the tok, we need to remove them
+					-- in order to check the actual word it contains
+					local cleanContent = string.gsub(content, Cleaner, "")
+
+					if lua_keyword[cleanContent] then
+						processedToken = "keyword"
+					elseif lua_builtin[cleanContent] then
+						processedToken = "builtin"
+					elseif string.find(previousContent1, "%.[%s%c]*$") and previousToken ~= "comment" then
+						-- The previous was a . so we need to special case indexing things
+						local parent = string.gsub(previousContent2, Cleaner, "")
+						local lib = lua_libraries[parent]
+						if lib and lib[cleanContent] and not string.find(previousContent3, "%.[%s%c]*$") then
+							-- Indexing a builtin lib with existing item, treat as a builtin
+							processedToken = "builtin"
+						else
+							-- Indexing a non builtin, can't be treated as a keyword/builtin
+							processedToken = "iden"
+						end
+						-- print("indexing",parent,"with",cleanTok,"as",t2)
+					else
+						processedToken = "iden"
+					end
+				elseif rawToken == "string_inter" then
+					if not string.find(content, "[^\\]{") then
+						-- This inter string doesnt actually have any inters
+						processedToken = "string"
+					else
+						-- We're gonna do our own yields, so the main loop won't need to
+						-- Our yields will be a mix of string and whatever is inside the inters
+						processedToken = nil
+
+						local isString = true
+						local subIndex = 1
+						local subSize = #content
+						while subIndex <= subSize do
+							-- Find next brace
+							local subStart, subFinish = string.find(content, "^.-[^\\][{}]", subIndex)
+							if subStart == nil then
+								-- No more braces, all string
+								coroutine.yield("string", string.sub(content, subIndex))
+								break
+							end
+
+							if isString then
+								-- We are currently a string
+								subIndex = subFinish + 1
+								coroutine.yield("string", string.sub(content, subStart, subFinish))
+
+								-- This brace opens code
+								isString = false
+							else
+								-- We are currently in code
+								subIndex = subFinish
+								local subContent = string.sub(content, subStart, subFinish - 1)
+								for innerToken, innerContent in lexer.scan(subContent) do
+									coroutine.yield(innerToken, innerContent)
+								end
+
+								-- This brace opens string/closes code
+								isString = true
+							end
+						end
+					end
+				end
+
+				-- Record last 3 tokens for the indexing context check
+				previousContent3 = previousContent2
+				previousContent2 = previousContent1
+				previousContent1 = content
+				previousToken = processedToken or rawToken
+				if processedToken then
+					coroutine.yield(processedToken, content)
+				end
+				break
+			end
+
+			-- No matches found
+			if not matched then
+				return
+			end
+		end
+
+		-- Completed the scan
+		return
+	end)
+
+	return function()
+		if coroutine.status(thread) == "dead" then
+			return
+		end
+
+		local success, token, content = coroutine.resume(thread)
+		if success and token then
+			return token, content
+		end
+
+		return
+	end
+end
+
+function lexer.navigator()
+	local nav = {
+		Source = "",
+		TokenCache = table.create(50),
+
+		_RealIndex = 0,
+		_UserIndex = 0,
+		_ScanThread = nil,
+	}
+
+	function nav:_createScanThread(StartPosition)
+		self._ScanThread = coroutine.create(function()
+			for Token, Src in lexer.scan(self.Source, StartPosition) do
+				self._RealIndex += 1
+				self.TokenCache[self._RealIndex] = { Token, Src }
+				coroutine.yield(Token, Src)
+			end
+		end)
+	end
+
+	function nav:Destroy()
+		self.Source = nil
+		self._RealIndex = nil
+		self._UserIndex = nil
+		self.TokenCache = nil
+		self._ScanThread = nil
+	end
+
+	function nav:SetSource(SourceString)
+		self.Source = SourceString
+
+		self._RealIndex = 0
+		self._UserIndex = 0
+		table.clear(self.TokenCache)
+
+		self:_createScanThread()
+	end
+
+	function nav:HotswapSource(SourceString)
+		local previousSource = self.Source
+
+		if
+			not previousSource
+			or #previousSource == 0
+			or #SourceString == 0
+			or string.byte(previousSource, 1) ~= string.byte(SourceString, 1)
+		then
+			-- No common tokens to share, just set normally
+			self:SetSource(SourceString)
+			return
+		end
+
+		self.Source = SourceString
+
+		local minimumLength, maximumLength = 0, math.min(#previousSource, #SourceString)
+		while minimumLength < maximumLength do
+			local mid = (minimumLength + maximumLength + 1) // 2
+
+			if
+				string.byte(previousSource, mid) == string.byte(SourceString, mid) -- cheap check of last character
+				and string.sub(previousSource, 1, mid - 1) == string.sub(SourceString, 1, mid - 1) -- expensive check of all previous characters
+			then
+				minimumLength = mid
+			else
+				maximumLength = mid - 1
+			end
+		end
+
+		local lastSharedTokenIndex = 0
+		local sourcePosition = 0
+
+		-- find position of the last common token that is cached
+		for tokenIndex, cachedToken in self.TokenCache do
+			local sourceLength = #cachedToken[2]
+
+			if sourcePosition + sourceLength <= minimumLength then
+				lastSharedTokenIndex = tokenIndex
+				sourcePosition += sourceLength
+			else
+				break
+			end
+		end
+
+		self._RealIndex = math.min(self._RealIndex, lastSharedTokenIndex)
+		self._UserIndex = 0
+
+		-- clear outdated tokens from the cache
+		for index = self._RealIndex + 1, #self.TokenCache do
+			self.TokenCache[index] = nil
+		end
+
+		self:_createScanThread(sourcePosition + 1)
+	end
+
+	function nav.Next()
+		nav._UserIndex += 1
+
+		if nav._RealIndex >= nav._UserIndex then
+			-- Already scanned, return cached
+			return table.unpack(nav.TokenCache[nav._UserIndex])
+		else
+			if coroutine.status(nav._ScanThread) == "dead" then
+				-- Scan thread dead
+				return
+			else
+				local success, token, src = coroutine.resume(nav._ScanThread)
+				if success and token then
+					-- Scanned new data
+					return token, src
+				else
+					-- Lex completed
+					return
+				end
+			end
+		end
+	end
+
+	function nav.Peek(PeekAmount)
+		local GoalIndex = nav._UserIndex + PeekAmount
+
+		if nav._RealIndex >= GoalIndex then
+			-- Already scanned, return cached
+			if GoalIndex > 0 then
+				return table.unpack(nav.TokenCache[GoalIndex])
+			else
+				-- Invalid peek
+				return
+			end
+		else
+			if coroutine.status(nav._ScanThread) == "dead" then
+				-- Scan thread dead
+				return
+			else
+				local IterationsAway = GoalIndex - nav._RealIndex
+
+				local success, token, src = nil, nil, nil
+
+				for _ = 1, IterationsAway do
+					success, token, src = coroutine.resume(nav._ScanThread)
+					if not (success or token) then
+						-- Lex completed
+						break
+					end
+				end
+
+				return token, src
+			end
+		end
+	end
+
+	return nav
+end
+
+return lexer
+]==])
+mod("language", _7, [[
+local language = {
+	keyword = {
+		["and"] = "keyword",
+		["break"] = "keyword",
+		["continue"] = "keyword",
+		["do"] = "keyword",
+		["else"] = "keyword",
+		["elseif"] = "keyword",
+		["end"] = "keyword",
+		["export"] = "keyword",
+		["false"] = "keyword",
+		["for"] = "keyword",
+		["function"] = "keyword",
+		["if"] = "keyword",
+		["in"] = "keyword",
+		["local"] = "keyword",
+		["nil"] = "keyword",
+		["not"] = "keyword",
+		["or"] = "keyword",
+		["repeat"] = "keyword",
+		["return"] = "keyword",
+		["self"] = "keyword",
+		["then"] = "keyword",
+		["true"] = "keyword",
+		["type"] = "keyword",
+		["typeof"] = "keyword",
+		["until"] = "keyword",
+		["while"] = "keyword",
+	},
+
+	builtin = {
+		-- Luau Functions
+		["assert"] = "function",
+		["error"] = "function",
+		["getfenv"] = "function",
+		["getmetatable"] = "function",
+		["ipairs"] = "function",
+		["loadstring"] = "function",
+		["newproxy"] = "function",
+		["next"] = "function",
+		["pairs"] = "function",
+		["pcall"] = "function",
+		["print"] = "function",
+		["rawequal"] = "function",
+		["rawget"] = "function",
+		["rawlen"] = "function",
+		["rawset"] = "function",
+		["select"] = "function",
+		["setfenv"] = "function",
+		["setmetatable"] = "function",
+		["tonumber"] = "function",
+		["tostring"] = "function",
+		["unpack"] = "function",
+		["xpcall"] = "function",
+
+		-- Luau Functions (Deprecated)
+		["collectgarbage"] = "function",
+
+		-- Luau Variables
+		["_G"] = "table",
+		["_VERSION"] = "string",
+
+		-- Luau Tables
+		["bit32"] = "table",
+		["buffer"] = "table",
+		["coroutine"] = "table",
+		["debug"] = "table",
+		["math"] = "table",
+		["os"] = "table",
+		["string"] = "table",
+		["table"] = "table",
+		["utf8"] = "table",
+		["vector"] = "table",
+
+		-- Roblox Functions
+		["DebuggerManager"] = "function",
+		["delay"] = "function",
+		["gcinfo"] = "function",
+		["PluginManager"] = "function",
+		["require"] = "function",
+		["settings"] = "function",
+		["spawn"] = "function",
+		["tick"] = "function",
+		["time"] = "function",
+		["UserSettings"] = "function",
+		["wait"] = "function",
+		["warn"] = "function",
+
+		-- Roblox Functions (Deprecated)
+		["Delay"] = "function",
+		["ElapsedTime"] = "function",
+		["elapsedTime"] = "function",
+		["printidentity"] = "function",
+		["Spawn"] = "function",
+		["Stats"] = "function",
+		["stats"] = "function",
+		["Version"] = "function",
+		["version"] = "function",
+		["Wait"] = "function",
+		["ypcall"] = "function",
+
+		-- Roblox Variables
+		["game"] = "Instance",
+		["plugin"] = "Instance",
+		["script"] = "Instance",
+		["shared"] = "Instance",
+		["workspace"] = "Instance",
+
+		-- Roblox Variables (Deprecated)
+		["Game"] = "Instance",
+		["Workspace"] = "Instance",
+
+		-- Roblox Tables
+		["Axes"] = "table",
+		["BrickColor"] = "table",
+		["CatalogSearchParams"] = "table",
+		["CFrame"] = "table",
+		["Color3"] = "table",
+		["ColorSequence"] = "table",
+		["ColorSequenceKeypoint"] = "table",
+		["DateTime"] = "table",
+		["DockWidgetPluginGuiInfo"] = "table",
+		["Enum"] = "table",
+		["Faces"] = "table",
+		["FloatCurveKey"] = "table",
+		["Font"] = "table",
+		["Instance"] = "table",
+		["NumberRange"] = "table",
+		["NumberSequence"] = "table",
+		["NumberSequenceKeypoint"] = "table",
+		["OverlapParams"] = "table",
+		["PathWaypoint"] = "table",
+		["PhysicalProperties"] = "table",
+		["Random"] = "table",
+		["Ray"] = "table",
+		["RaycastParams"] = "table",
+		["Rect"] = "table",
+		["Region3"] = "table",
+		["Region3int16"] = "table",
+		["RotationCurveKey"] = "table",
+		["SharedTable"] = "table",
+		["task"] = "table",
+		["TweenInfo"] = "table",
+		["UDim"] = "table",
+		["UDim2"] = "table",
+		["Vector2"] = "table",
+		["Vector2int16"] = "table",
+		["Vector3"] = "table",
+		["Vector3int16"] = "table",
+	},
+
+	libraries = {
+
+		-- Luau Libraries
+		bit32 = {
+			arshift = "function",
+			band = "function",
+			bnot = "function",
+			bor = "function",
+			btest = "function",
+			bxor = "function",
+			countlz = "function",
+			countrz = "function",
+			extract = "function",
+			lrotate = "function",
+			lshift = "function",
+			replace = "function",
+			rrotate = "function",
+			rshift = "function",
+		},
+
+		buffer = {
+			copy = "function",
+			create = "function",
+			fill = "function",
+			fromstring = "function",
+			len = "function",
+			readf32 = "function",
+			readf64 = "function",
+			readi8 = "function",
+			readi16 = "function",
+			readi32 = "function",
+			readu16 = "function",
+			readu32 = "function",
+			readu8 = "function",
+			readstring = "function",
+			tostring = "function",
+			writef32 = "function",
+			writef64 = "function",
+			writei16 = "function",
+			writei32 = "function",
+			writei8 = "function",
+			writestring = "function",
+			writeu16 = "function",
+			writeu32 = "function",
+			writeu8 = "function",
+		},
+
+		coroutine = {
+			close = "function",
+			create = "function",
+			isyieldable = "function",
+			resume = "function",
+			running = "function",
+			status = "function",
+			wrap = "function",
+			yield = "function",
+		},
+
+		debug = {
+			dumpheap = "function",
+			getmemorycategory = "function",
+			info = "function",
+			loadmodule = "function",
+			profilebegin = "function",
+			profileend = "function",
+			resetmemorycategory = "function",
+			setmemorycategory = "function",
+			traceback = "function",
+		},
+
+		math = {
+			abs = "function",
+			acos = "function",
+			asin = "function",
+			atan2 = "function",
+			atan = "function",
+			ceil = "function",
+			clamp = "function",
+			cos = "function",
+			cosh = "function",
+			deg = "function",
+			exp = "function",
+			floor = "function",
+			fmod = "function",
+			frexp = "function",
+			ldexp = "function",
+			log10 = "function",
+			log = "function",
+			max = "function",
+			min = "function",
+			modf = "function",
+			noise = "function",
+			pow = "function",
+			rad = "function",
+			random = "function",
+			randomseed = "function",
+			round = "function",
+			sign = "function",
+			sin = "function",
+			sinh = "function",
+			sqrt = "function",
+			tan = "function",
+			tanh = "function",
+
+			huge = "number",
+			pi = "number",
+		},
+
+		os = {
+			clock = "function",
+			date = "function",
+			difftime = "function",
+			time = "function",
+		},
+
+		string = {
+			byte = "function",
+			char = "function",
+			find = "function",
+			format = "function",
+			gmatch = "function",
+			gsub = "function",
+			len = "function",
+			lower = "function",
+			match = "function",
+			pack = "function",
+			packsize = "function",
+			rep = "function",
+			reverse = "function",
+			split = "function",
+			sub = "function",
+			unpack = "function",
+			upper = "function",
+		},
+
+		table = {
+			clear = "function",
+			clone = "function",
+			concat = "function",
+			create = "function",
+			find = "function",
+			foreach = "function",
+			foreachi = "function",
+			freeze = "function",
+			getn = "function",
+			insert = "function",
+			isfrozen = "function",
+			maxn = "function",
+			move = "function",
+			pack = "function",
+			remove = "function",
+			sort = "function",
+			unpack = "function",
+		},
+
+		utf8 = {
+			char = "function",
+			codepoint = "function",
+			codes = "function",
+			graphemes = "function",
+			len = "function",
+			nfcnormalize = "function",
+			nfdnormalize = "function",
+			offset = "function",
+
+			charpattern = "string",
+		},
+
+		vector = {
+			abs = "function",
+			angle = "function",
+			ceil = "function",
+			clamp = "function",
+			create = "function",
+			cross = "function",
+			dot = "function",
+			floor = "function",
+			magnitude = "function",
+			max = "function",
+			min = "function",
+			normalize = "function",
+			sign = "function",
+
+			one = "vector",
+			zero = "vector",
+		},
+
+		-- Roblox Libraries
+		Axes = {
+			new = "function",
+		},
+
+		BrickColor = {
+			Black = "function",
+			Blue = "function",
+			DarkGray = "function",
+			Gray = "function",
+			Green = "function",
+			new = "function",
+			New = "function",
+			palette = "function",
+			Random = "function",
+			random = "function",
+			Red = "function",
+			White = "function",
+			Yellow = "function",
+		},
+
+		CatalogSearchParams = {
+			new = "function",
+		},
+
+		CFrame = {
+			Angles = "function",
+			fromAxisAngle = "function",
+			fromEulerAngles = "function",
+			fromEulerAnglesXYZ = "function",
+			fromEulerAnglesYXZ = "function",
+			fromMatrix = "function",
+			fromOrientation = "function",
+			lookAt = "function",
+			new = "function",
+
+			identity = "CFrame",
+		},
+
+		Color3 = {
+			fromHex = "function",
+			fromHSV = "function",
+			fromRGB = "function",
+			new = "function",
+			toHSV = "function",
+		},
+
+		ColorSequence = {
+			new = "function",
+		},
+
+		ColorSequenceKeypoint = {
+			new = "function",
+		},
+
+		DateTime = {
+			fromIsoDate = "function",
+			fromLocalTime = "function",
+			fromUniversalTime = "function",
+			fromUnixTimestamp = "function",
+			fromUnixTimestampMillis = "function",
+			now = "function",
+		},
+
+		DockWidgetPluginGuiInfo = {
+			new = "function",
+		},
+
+		Enum = {},
+
+		Faces = {
+			new = "function",
+		},
+
+		FloatCurveKey = {
+			new = "function",
+		},
+
+		Font = {
+			fromEnum = "function",
+			fromId = "function",
+			fromName = "function",
+			new = "function",
+		},
+
+		Instance = {
+			new = "function",
+		},
+
+		NumberRange = {
+			new = "function",
+		},
+
+		NumberSequence = {
+			new = "function",
+		},
+
+		NumberSequenceKeypoint = {
+			new = "function",
+		},
+
+		OverlapParams = {
+			new = "function",
+		},
+
+		PathWaypoint = {
+			new = "function",
+		},
+
+		PhysicalProperties = {
+			new = "function",
+		},
+
+		Random = {
+			new = "function",
+		},
+
+		Ray = {
+			new = "function",
+		},
+
+		RaycastParams = {
+			new = "function",
+		},
+
+		Rect = {
+			new = "function",
+		},
+
+		Region3 = {
+			new = "function",
+		},
+
+		Region3int16 = {
+			new = "function",
+		},
+
+		RotationCurveKey = {
+			new = "function",
+		},
+
+		SharedTable = {
+			clear = "function",
+			clone = "function",
+			cloneAndFreeze = "function",
+			increment = "function",
+			isFrozen = "function",
+			new = "function",
+			size = "function",
+			update = "function",
+		},
+
+		task = {
+			cancel = "function",
+			defer = "function",
+			delay = "function",
+			desynchronize = "function",
+			spawn = "function",
+			synchronize = "function",
+			wait = "function",
+		},
+
+		TweenInfo = {
+			new = "function",
+		},
+
+		UDim = {
+			new = "function",
+		},
+
+		UDim2 = {
+			fromOffset = "function",
+			fromScale = "function",
+			new = "function",
+		},
+
+		Vector2 = {
+			new = "function",
+
+			one = "Vector2",
+			xAxis = "Vector2",
+			yAxis = "Vector2",
+			zero = "Vector2",
+		},
+
+		Vector2int16 = {
+			new = "function",
+		},
+
+		Vector3 = {
+			fromAxis = "function",
+			FromAxis = "function",
+			fromNormalId = "function",
+			FromNormalId = "function",
+			new = "function",
+
+			one = "Vector3",
+			xAxis = "Vector3",
+			yAxis = "Vector3",
+			zAxis = "Vector3",
+			zero = "Vector3",
+		},
+
+		Vector3int16 = {
+			new = "function",
+		},
+	},
+}
+
+-- Filling up language.libraries.Enum table
+local enumLibraryTable = language.libraries.Enum
+
+for _, enum in ipairs(Enum:GetEnums()) do
+	--TODO: Remove tostring from here once there is a better way to get the name of an Enum
+	enumLibraryTable[tostring(enum)] = "Enum"
+end
+
+return language
+]])
+mod("theme", _6, [[
+local DEFAULT_TOKEN_COLORS = {
+	["background"] = Color3.fromRGB(47, 47, 47),
+	["iden"] = Color3.fromRGB(234, 234, 234),
+	["keyword"] = Color3.fromRGB(215, 174, 255),
+	["builtin"] = Color3.fromRGB(131, 206, 255),
+	["string"] = Color3.fromRGB(196, 255, 193),
+	["number"] = Color3.fromRGB(255, 125, 125),
+	["comment"] = Color3.fromRGB(140, 140, 155),
+	["operator"] = Color3.fromRGB(255, 239, 148),
+	["custom"] = Color3.fromRGB(119, 122, 255),
+}
+
+local types = require(script.Parent.types)
+
+local Theme = {
+	tokenColors = {},
+	tokenRichTextFormatter = {},
+}
+
+function Theme.setColors(tokenColors: types.TokenColors)
+	assert(type(tokenColors) == "table", "Theme.updateColors expects a table")
+
+	for tokenName, color in tokenColors do
+		Theme.tokenColors[tokenName] = color
+	end
+end
+
+function Theme.getColoredRichText(color: Color3, text: string): string
+	return '<font color="#' .. color:ToHex() .. '">' .. text .. "</font>"
+end
+
+function Theme.getColor(tokenName: types.TokenName): Color3
+	return Theme.tokenColors[tokenName]
+end
+
+function Theme.matchStudioSettings(refreshCallback: () -> ()): boolean
+	local success = pcall(function()
+		-- When not used in a Studio plugin, this will error
+		-- and the pcall will just silently return
+		local studio = settings().Studio
+		local studioTheme = studio.Theme
+
+		local function getTokens()
+			return {
+				["background"] = studioTheme:GetColor(Enum.StudioStyleGuideColor.ScriptBackground),
+				["iden"] = studioTheme:GetColor(Enum.StudioStyleGuideColor.ScriptText),
+				["keyword"] = studioTheme:GetColor(Enum.StudioStyleGuideColor.ScriptKeyword),
+				["builtin"] = studioTheme:GetColor(Enum.StudioStyleGuideColor.ScriptBuiltInFunction),
+				["string"] = studioTheme:GetColor(Enum.StudioStyleGuideColor.ScriptString),
+				["number"] = studioTheme:GetColor(Enum.StudioStyleGuideColor.ScriptNumber),
+				["comment"] = studioTheme:GetColor(Enum.StudioStyleGuideColor.ScriptComment),
+				["operator"] = studioTheme:GetColor(Enum.StudioStyleGuideColor.ScriptOperator),
+				["custom"] = studioTheme:GetColor(Enum.StudioStyleGuideColor.ScriptBool),
+			}
+		end
+
+		Theme.setColors(getTokens())
+		studio.ThemeChanged:Connect(function()
+			studioTheme = studio.Theme
+			Theme.setColors(getTokens())
+			refreshCallback()
+		end)
+	end)
+	return success
+end
+
+-- Initialize
+Theme.setColors(DEFAULT_TOKEN_COLORS)
+
+return Theme
+]])
+mod("types", _6, [[
+export type TextObject = TextLabel | TextBox
+
+export type TokenName =
+	"background"
+	| "iden"
+	| "keyword"
+	| "builtin"
+	| "string"
+	| "number"
+	| "comment"
+	| "operator"
+	| "custom"
+
+export type TokenColors = {
+	["background"]: Color3?,
+	["iden"]: Color3?,
+	["keyword"]: Color3?,
+	["builtin"]: Color3?,
+	["string"]: Color3?,
+	["number"]: Color3?,
+	["comment"]: Color3?,
+	["operator"]: Color3?,
+	["custom"]: Color3?,
+}
+
+export type HighlightProps = {
+	textObject: TextObject,
+	src: string?,
+	forceUpdate: boolean?,
+	lexer: Lexer?,
+	customLang: { [string]: string }?,
+}
+
+export type BuildRichTextLinesProps = {
+	src: string,
+	lexer: Lexer?,
+	customLang: { [string]: string }?,
+}
+
+export type Lexer = {
+	scan: (src: string) -> () -> (string, string),
+	navigator: () -> any,
+	finished: boolean?,
+}
+
+export type ObjectData = {
+	Text: string,
+	Labels: { TextLabel },
+	Lines: { string },
+	Lexer: Lexer?,
+	CustomLang: { [string]: string }?,
+}
+
+return nil
+]])
+mod("utility", _6, [[
+local types = require(script.Parent.types)
+
+local Utility = {}
+
+function Utility.sanitizeRichText(s: string): string
+	return string.gsub(
+		string.gsub(string.gsub(string.gsub(string.gsub(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), '"', "&quot;"),
+		"'",
+		"&apos;"
+	)
+end
+
+function Utility.convertTabsToSpaces(s: string): string
+	return string.gsub(s, "\t", "    ")
+end
+
+function Utility.removeControlChars(s: string): string
+	return string.gsub(s, "[\0\1\2\3\4\5\6\7\8\11\12\13\14\15\16\17\18\19\20\21\22\23\24\25\26\27\28\29\30\31]+", "")
+end
+
+function Utility.getInnerAbsoluteSize(textObject: types.TextObject): Vector2
+	local fullSize = textObject.AbsoluteSize
+
+	local padding: UIPadding? = textObject:FindFirstChildWhichIsA("UIPadding")
+	if padding then
+		local offsetX = padding.PaddingLeft.Offset + padding.PaddingRight.Offset
+		local scaleX = (fullSize.X * padding.PaddingLeft.Scale) + (fullSize.X * padding.PaddingRight.Scale)
+		local offsetY = padding.PaddingTop.Offset + padding.PaddingBottom.Offset
+		local scaleY = (fullSize.Y * padding.PaddingTop.Scale) + (fullSize.Y * padding.PaddingBottom.Scale)
+		return Vector2.new(fullSize.X - (scaleX + offsetX), fullSize.Y - (scaleY + offsetY))
+	else
+		return fullSize
+	end
+end
+
+function Utility.getTextBounds(textObject: types.TextObject): Vector2
+	if textObject.ContentText == "" then
+		return Vector2.zero
+	end
+
+	local textBounds = textObject.TextBounds
+
+	-- Wait for TextBounds to be non-NaN and non-zero because Roblox
+	while (textBounds.Y ~= textBounds.Y) or (textBounds.Y < 1) do
+		task.wait()
+		textBounds = textObject.TextBounds
+	end
+	return textBounds
+end
+
+return Utility
+]])
 mod("Host", _1, [[
 -- The Host: the bridge between the pure shell Evaluator and Karet's command framework.
 --
@@ -1267,7 +2763,7 @@ end
 
 return Host
 ]])
-local _6 = mod("Iris", _1, [==[
+local _8 = mod("Iris", _1, [==[
 --!optimize 2
 local Types = require(script.Types)
 
@@ -1965,7 +3461,7 @@ require(script.API)(Iris)
 
 return Iris
 ]==])
-mod("API", _6, [==[
+mod("API", _8, [==[
 local Types = require(script.Parent.Types)
 
 return function(Iris: Types.Iris)
@@ -4052,7 +5548,7 @@ return function(Iris: Types.Iris)
     end
 end
 ]==])
-mod("Internal", _6, [==[
+mod("Internal", _8, [==[
 local Types = require(script.Parent.Types)
 
 return function(Iris: Types.Iris): Types.Internal
@@ -4949,7 +6445,7 @@ return function(Iris: Types.Iris): Types.Internal
     return Internal
 end
 ]==])
-mod("PubTypes", _6, [[
+mod("PubTypes", _8, [[
 local Types = require(script.Parent.Types)
 
 export type ID = Types.ID
@@ -4994,7 +6490,7 @@ export type Iris = Types.Iris
 
 return {}
 ]])
-mod("Types", _6, [=[
+mod("Types", _8, [=[
 local WidgetTypes = require(script.Parent.WidgetTypes)
 
 export type ID = WidgetTypes.ID
@@ -5656,7 +7152,7 @@ export type Iris = {
 
 return {}
 ]=])
-mod("WidgetTypes", _6, [[
+mod("WidgetTypes", _8, [[
 --[=[
     @within Iris
     @type ID string
@@ -6179,7 +7675,7 @@ export type Table = ParentWidget & {
 
 return {}
 ]])
-mod("config", _6, [[
+mod("config", _8, [[
 local TemplateConfig = {
     colorDark = { -- Dear, ImGui default dark
         TextColor = Color3.fromRGB(255, 255, 255),
@@ -6486,7 +7982,7 @@ local TemplateConfig = {
 
 return TemplateConfig
 ]])
-mod("demoWindow", _6, [=[
+mod("demoWindow", _8, [=[
 local Types = require(script.Parent.Types)
 
 return function(Iris: Types.Iris)
@@ -8447,7 +9943,7 @@ return function(Iris: Types.Iris)
     end
 end
 ]=])
-local _7 = mod("widgets", _6, [[
+local _9 = mod("widgets", _8, [[
 local Types = require(script.Parent.Types)
 
 local widgets = {} :: Types.WidgetUtility
@@ -8896,7 +10392,7 @@ return function(Iris: Types.Internal)
     require(script.Table)(Iris, widgets)
 end
 ]])
-mod("Button", _7, [[
+mod("Button", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -8988,7 +10484,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     )
 end
 ]])
-mod("Checkbox", _7, [[
+mod("Checkbox", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -9105,7 +10601,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Combo", _7, [[
+mod("Combo", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -9599,7 +11095,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Format", _7, [[
+mod("Format", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -9741,7 +11237,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Image", _7, [[
+mod("Image", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -9898,7 +11394,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     )
 end
 ]])
-mod("Input", _7, [=[
+mod("Input", _9, [=[
 local Types = require(script.Parent.Parent.Types)
 
 type InputDataTypes = "Num" | "Vector2" | "Vector3" | "UDim" | "UDim2" | "Color3" | "Color4" | "Rect" | "Enum" | "" | string
@@ -11132,7 +12628,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]=])
-mod("Menu", _7, [[
+mod("Menu", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -11733,7 +13229,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Plot", _7, [[
+mod("Plot", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -12374,7 +13870,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("RadioButton", _7, [[
+mod("RadioButton", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -12502,7 +13998,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Root", _7, [[
+mod("Root", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -12647,7 +14143,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Tab", _7, [[
+mod("Tab", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -12982,7 +14478,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Table", _7, [=[
+mod("Table", _9, [=[
 local Types = require(script.Parent.Parent.Types)
 
 -- Tables need an overhaul.
@@ -13616,7 +15112,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]=])
-mod("Text", _7, [[
+mod("Text", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -13750,7 +15246,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Tree", _7, [[
+mod("Tree", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -14039,7 +15535,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     )
 end
 ]])
-mod("Window", _7, [[
+mod("Window", _9, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -15116,7 +16612,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-local _8 = mod("Kaveat", _1, [[
+local _10 = mod("Kaveat", _1, [[
 -- Kaveat, the script editor. custom ui, feels like neovim: a topbar, a kavs file tree,
 -- tabs, the editor, an output pane and a modeline, all resizable, plus a draggable window.
 -- two modes like nvim: READ and WRITE. click or press i to write, esc to read. : opens a
@@ -15127,6 +16623,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 
 local Theme = require(script.Parent.Theme)
+local deps = require(script.Parent.deps)
 local create = require(script.Parent.Terminal.create)
 
 local Kaveat = {}
@@ -15139,6 +16636,24 @@ local TREE_W = 190
 local OUT_H = 130
 local TAB_H = 26
 local MODE_H = 22
+
+-- the : commands, used for the cmdline autocomplete
+local CMDS = {
+	{ name = "w", detail = "save" },
+	{ name = "q", detail = "close tab" },
+	{ name = "wq", detail = "save and close" },
+	{ name = "e", detail = "open file" },
+	{ name = "new", detail = "new file" },
+	{ name = "run", detail = "run buffer" },
+	{ name = "server", detail = "server context" },
+	{ name = "client", detail = "client context" },
+	{ name = "ls", detail = "list kavs" },
+	{ name = "close", detail = "close editor" },
+}
+
+local function rgb(c: Color3): string
+	return string.format("rgb(%d,%d,%d)", math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
+end
 
 export type Buffer = { name: string, context: string, source: string, dirty: boolean }
 
@@ -15158,8 +16673,18 @@ function Kaveat.new(opts: { [string]: any }?)
 	self.outH = OUT_H
 	self.outLines = {}
 	self._setting = false
+	self.cmdSuggestions = {}
+	self.cmdSel = 0
+	self.cmdSugLabels = {}
 
 	self:build(options)
+
+	-- syntax highlighting on the editor box (boatbombers highlighter, vendored)
+	local Highlighter = deps.Highlighter()
+	if Highlighter then
+		self.highlighter = Highlighter
+		self.hlCleanup = Highlighter.highlight({ textObject = self.box })
+	end
 
 	self.unsubscribeTheme = Theme.OnChanged(function(palette)
 		self:applyTheme(palette)
@@ -15195,6 +16720,7 @@ function Kaveat:build(options)
 		Font = FONT,
 		TextSize = 16,
 		Text = "x",
+		TextColor3 = Color3.fromRGB(130, 203, 255),
 	})
 	local topbar = create("Frame", {
 		Name = "TopBar",
@@ -15385,6 +16911,32 @@ function Kaveat:build(options)
 		Children = { create("UIStroke", { Thickness = 1 }), cmdBox },
 	})
 
+	-- cmdline autocomplete, sits just above the cmdline
+	local cmdStroke = create("UIStroke", { Thickness = 1 })
+	local cmdSug = create("Frame", {
+		Name = "CmdSug",
+		Visible = false,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 8, 0, -2),
+		Size = UDim2.fromOffset(320, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BorderSizePixel = 0,
+		ZIndex = 8,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			cmdStroke,
+			create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }),
+			create("UIPadding", {
+				PaddingTop = UDim.new(0, 4),
+				PaddingBottom = UDim.new(0, 4),
+				PaddingLeft = UDim.new(0, 6),
+				PaddingRight = UDim.new(0, 6),
+			}),
+		},
+		Parent = cmdline,
+	})
+	self.cmdSug, self.cmdStroke = cmdSug, cmdStroke
+
 	-- resize grip, bottom right corner
 	local grip = create("TextButton", {
 		Name = "Grip",
@@ -15430,12 +16982,12 @@ function Kaveat:build(options)
 	self.modeChip, self.ctxLabel, self.fileLabel, self.title = modeChip, ctxLabel, fileLabel, title
 	self.cmdline, self.cmdBox, self.treeDrag, self.outDrag = cmdline, cmdBox, treeDrag, outDrag
 
-	self.themed.bg = { window, tree, tabBar, output }
+	self.themed.bg = { window, tree, tabBar, output, cmdSug }
 	self.themed.surface = { topbar, modeline, cmdline }
 	self.themed.fg = { box }
 	self.themed.muted = { gutter, treeTitle, ctxLabel, fileLabel }
 	self.themed.accent = { title }
-	self.themed.border = { stroke, treeDrag, outDrag }
+	self.themed.border = { stroke, treeDrag, outDrag, cmdStroke }
 
 	box.Focused:Connect(function()
 		self.mode = "WRITE"
@@ -15464,8 +17016,12 @@ function Kaveat:build(options)
 	self:wireDrag(outDrag, "out")
 	self:wireWindow(topbar, grip)
 
+	cmdBox:GetPropertyChangedSignal("Text"):Connect(function()
+		self:cmdSuggest()
+	end)
 	cmdBox.FocusLost:Connect(function(enter)
 		self.cmdline.Visible = false
+		self:hideCmdSug()
 		local text = cmdBox.Text
 		cmdBox.Text = ""
 		if enter then
@@ -15522,6 +17078,21 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 		return
 	end
 
+	-- cmdline open: tab accepts, up/down move the suggestion (these are processed by the
+	-- cmd textbox so handle them before the processed guard)
+	if self.cmdline.Visible then
+		if key == Enum.KeyCode.Tab then
+			if #self.cmdSuggestions > 0 then
+				self:acceptCmdSug()
+			end
+		elseif key == Enum.KeyCode.Up then
+			self:moveCmdSel(-1)
+		elseif key == Enum.KeyCode.Down then
+			self:moveCmdSel(1)
+		end
+		return
+	end
+
 	if self.mode == "WRITE" then
 		if key == Enum.KeyCode.Escape then
 			self.box:ReleaseFocus()
@@ -15529,7 +17100,7 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 		return
 	end
 
-	-- READ mode, ignore keys eaten by another textbox (eg the cmdline)
+	-- READ mode, ignore keys eaten by another textbox
 	if processed then
 		return
 	end
@@ -15538,7 +17109,98 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 	elseif key == Enum.KeyCode.Semicolon and shift then
 		self.cmdline.Visible = true
 		self.cmdBox:CaptureFocus()
+		self:cmdSuggest()
 	end
+end
+
+-- cmdline autocomplete -----------------------------------------------------
+
+function Kaveat:cmdSuggest()
+	local text = self.cmdBox.Text
+	local word, rest = string.match(text, "^(%S*)(.*)$")
+	local out = {}
+	if rest == "" then
+		local p = string.lower(word)
+		for _, c in CMDS do
+			if string.sub(c.name, 1, #p) == p then
+				table.insert(out, { text = c.name, detail = c.detail, insert = c.name .. " " })
+			end
+		end
+	else
+		local cmd = string.lower(word)
+		if cmd == "e" or cmd == "edit" or cmd == "new" then
+			local partial = string.lower((string.gsub(rest, "^%s*", "")))
+			for _, name in self:listFiles() do
+				if string.sub(string.lower(name), 1, #partial) == partial then
+					table.insert(out, { text = name, detail = "kav", insert = word .. " " .. name })
+				end
+			end
+		end
+	end
+	self.cmdSuggestions = out
+	self.cmdSel = #out > 0 and 1 or 0
+	self:renderCmdSug()
+end
+
+function Kaveat:renderCmdSug()
+	for _, l in self.cmdSugLabels do
+		l:Destroy()
+	end
+	table.clear(self.cmdSugLabels)
+	local show = self.cmdline.Visible and #self.cmdSuggestions > 0
+	self.cmdSug.Visible = show
+	if not show then
+		return
+	end
+	local p = self.palette
+	local fg = (p and p.Foreground) or Color3.new(1, 1, 1)
+	local muted = (p and p.Muted) or Color3.fromRGB(120, 120, 120)
+	local sel = (p and p.Selection) or Color3.fromRGB(60, 60, 80)
+	for i, s in self.cmdSuggestions do
+		if i > 8 then
+			break
+		end
+		local label = create("TextLabel", {
+			Name = "S",
+			BackgroundColor3 = sel,
+			BackgroundTransparency = i == self.cmdSel and 0 or 1,
+			Size = UDim2.new(1, 0, 0, 18),
+			Font = FONT,
+			TextSize = 13,
+			RichText = true,
+			Text = `{s.text}  <font color="{rgb(muted)}" size="11">{s.detail}</font>`,
+			TextColor3 = fg,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = i,
+			ZIndex = 9,
+			Parent = self.cmdSug,
+		})
+		table.insert(self.cmdSugLabels, label)
+	end
+end
+
+function Kaveat:moveCmdSel(d: number)
+	local n = math.min(#self.cmdSuggestions, 8)
+	if n == 0 then
+		return
+	end
+	self.cmdSel = ((self.cmdSel - 1 + d) % n) + 1
+	self:renderCmdSug()
+end
+
+function Kaveat:acceptCmdSug()
+	local s = self.cmdSuggestions[self.cmdSel]
+	if not s then
+		return
+	end
+	self.cmdBox.Text = s.insert
+	self.cmdBox.CursorPosition = #s.insert + 1
+end
+
+function Kaveat:hideCmdSug()
+	self.cmdSuggestions = {}
+	self.cmdSel = 0
+	self:renderCmdSug()
 end
 
 function Kaveat:runCmd(text: string)
@@ -15915,6 +17577,18 @@ function Kaveat:applyTheme(palette: { [string]: Color3 })
 	end
 	self.cmdBox.TextColor3 = palette.Foreground
 	self.cmdBox.PlaceholderColor3 = palette.Muted
+	if self.highlighter then
+		self.highlighter.setTokenColors({
+			background = palette.Background,
+			iden = palette.Foreground,
+			keyword = palette.Keyword,
+			builtin = palette.Type,
+			string = palette.String,
+			number = palette.Number,
+			comment = palette.Comment,
+			operator = palette.Operator,
+		})
+	end
 	self:refreshMode()
 	self:refreshTree()
 	self:refreshTabs()
@@ -15927,12 +17601,15 @@ function Kaveat:destroy()
 	if self.inputConn then
 		self.inputConn:Disconnect()
 	end
+	if self.hlCleanup then
+		self.hlCleanup()
+	end
 	self.gui:Destroy()
 end
 
 return Kaveat
 ]])
-local _9 = mod("Networking", _1, [[
+local _11 = mod("Networking", _1, [[
 -- The client/server transport for Karet commands, over Substance.
 --
 -- Only Server and Context commands cross the boundary; Shared/Client run entirely on the
@@ -16042,7 +17719,7 @@ end
 
 return Networking
 ]])
-local _10 = mod("Profile", _1, [[
+local _12 = mod("Profile", _1, [[
 -- a profile holds the per user stuff, history, the theme they picked, saved kav scripts
 -- and any custom commands. its just in memory for now, can hook it to a datastore later
 
@@ -16069,7 +17746,7 @@ end
 
 return Profile
 ]])
-local _11 = mod("Query", _1, [[
+local _13 = mod("Query", _1, [[
 -- A named-query registry. Karet (and your game) registers providers - "players", "teams",
 -- "commands", whatever - and commands run them by name through ctx.Query. This gives
 -- commands a uniform way to look things up without each one re-implementing resolution.
@@ -16121,7 +17798,7 @@ end
 
 return Query
 ]])
-local _12 = mod("Registry", _1, [[
+local _14 = mod("Registry", _1, [[
 -- The command registry. Holds command definitions, resolves names + aliases
 -- (case-insensitively), and offers the fluent builder (sugar over the table form).
 --
@@ -16286,7 +17963,7 @@ end
 
 return Registry
 ]])
-local _13 = mod("Shell", _1, [[
+local _15 = mod("Shell", _1, [[
 -- The Karet shell: the tokenizer + parser + evaluator that turn a line of input into an
 -- executed chain. This is the power-user surface; the umbrella `Karet` re-exports the
 -- common entry points (Karet.Tokenize / Parse / Analyze / ...) flat.
@@ -16336,7 +18013,7 @@ end
 
 return Shell
 ]])
-mod("Ast", _13, [[
+mod("Ast", _15, [[
 -- AST node kinds for the Karet shell. The parser builds plain tables tagged with a
 -- `kind` from Ast.Kind; the evaluator dispatches on it. See GRAMMAR.md §3.
 
@@ -16366,7 +18043,7 @@ Ast.Kind = {
 
 return Ast
 ]])
-mod("Evaluator", _13, [[
+mod("Evaluator", _15, [[
 -- The Karet shell evaluator: walk an AST, run chains/guards, drive the return pool and
 -- session variables, and evaluate expressions/type-guards.
 --
@@ -16784,7 +18461,7 @@ end
 
 return Evaluator
 ]])
-mod("Lexer", _13, [[
+mod("Lexer", _15, [[
 -- The Karet shell lexer: source text -> a flat list of neutral tokens.
 --
 -- Neutral means: no FLAG / DIRECTIVE / SLASH_REF / SLASH_DIV tokens. `-`, `--`, `/`,
@@ -17144,7 +18821,7 @@ end
 
 return Lexer
 ]])
-mod("Parser", _13, [[
+mod("Parser", _15, [[
 -- Recursive-descent parser for the Karet shell. Tokens -> AST + diagnostics.
 --
 -- The parser is where context lives (GRAMMAR.md §1): the same `/` token becomes a
@@ -17711,7 +19388,7 @@ end
 
 return Parser
 ]])
-mod("ReturnPool", _13, [[
+mod("ReturnPool", _15, [[
 -- The return pool (GRAMMAR.md §5). Commands push typed/labelled return records; `/`
 -- references read them back. There is no positional stack - you reference returns by
 -- what they are. Failed links contribute nothing, so the pool only holds real results.
@@ -17822,7 +19499,7 @@ end
 
 return ReturnPool
 ]])
-mod("Token", _13, [[
+mod("Token", _15, [[
 -- Token kinds and the Token shape for the Karet shell lexer.
 --
 -- The lexer is deliberately neutral (see GRAMMAR.md §2): it never decides whether a
@@ -17898,7 +19575,7 @@ export type Token = {
 
 return Token
 ]])
-local _14 = mod("Substance", _1, [[
+local _16 = mod("Substance", _1, [[
 -- Substance
 -- init.lua
 -- Plinko Labs
@@ -17970,7 +19647,7 @@ Substance.Type = Particle.Type
 
 return Substance
 ]])
-local _15 = mod("Async", _14, [[
+local _17 = mod("Async", _16, [[
 -- Substance
 -- Async/init.lua
 -- Plinko Labs
@@ -17983,7 +19660,7 @@ return {
 	Branch = Branch,
 }
 ]])
-mod("Branch", _15, [[
+mod("Branch", _17, [[
 -- Substance
 -- Async/Branch.lua
 -- Plinko Labs
@@ -18010,7 +19687,7 @@ end
 
 return Branch
 ]])
-mod("Promise", _15, [==[
+mod("Promise", _17, [==[
 --[[
 	An implementation of Promises similar to Promise/A+.
 ]]
@@ -19993,7 +21670,7 @@ function Promise.onUnhandledRejection(callback)
 end
 
 return Promise]==])
-mod("Reaction", _15, [[
+mod("Reaction", _17, [[
 -- Substance
 -- Async/Reaction.lua
 -- Plinko Labs
@@ -20140,7 +21817,7 @@ end
 
 return Reaction
 ]])
-local _16 = mod("Particle", _14, [[
+local _18 = mod("Particle", _16, [[
 -- Substance
 -- Particle/init.lua
 -- Plinko Labs
@@ -20181,7 +21858,7 @@ end
 
 return Particle
 ]])
-mod("Atom", _16, [[
+mod("Atom", _18, [[
 -- Substance
 -- Particle/Atom.lua
 -- Plinko Labs
@@ -20252,7 +21929,7 @@ end
 
 return Atom
 ]])
-mod("Dispatch", _16, [[
+mod("Dispatch", _18, [[
 -- Substance
 -- Particle/Dispatch.lua
 -- Plinko Labs
@@ -20459,7 +22136,7 @@ end
 
 return Dispatch
 ]])
-mod("Fossil", _16, [[
+mod("Fossil", _18, [[
 -- Substance
 -- Particle/Fossil.lua
 -- Plinko Labs
@@ -20510,7 +22187,7 @@ end
 
 return Fossil
 ]])
-mod("Hooks", _16, [[
+mod("Hooks", _18, [[
 -- Substance
 -- Particle/Hooks.lua
 -- Plinko Labs
@@ -20564,7 +22241,7 @@ end
 
 return Hooks
 ]])
-mod("Molecule", _16, [[
+mod("Molecule", _18, [[
 -- Substance
 -- Particle/Molecule.lua
 -- Plinko Labs
@@ -20619,7 +22296,7 @@ end
 
 return Molecule
 ]])
-mod("Registry", _16, [[
+mod("Registry", _18, [[
 -- Substance
 -- Particle/Registry.lua
 -- Plinko Labs
@@ -20666,7 +22343,7 @@ end
 
 return Registry
 ]])
-mod("Remotes", _16, [[
+mod("Remotes", _18, [[
 -- Substance
 -- Particle/Remotes.lua
 -- Plinko Labs
@@ -20724,7 +22401,7 @@ end
 
 return Remotes
 ]])
-mod("Schema", _16, [[
+mod("Schema", _18, [[
 -- Substance
 -- Particle/Schema.lua
 -- Plinko Labs
@@ -20811,14 +22488,14 @@ end
 
 return Schema
 ]])
-local _17 = mod("Type", _16, [[
+local _19 = mod("Type", _18, [[
 -- Substance
 -- Particle/Type/init.lua
 -- Plinko Labs
 
 return require(script.Constructors)
 ]])
-mod("Constructors", _17, [[
+mod("Constructors", _19, [[
 -- Substance
 -- Particle/Type/Constructors.lua
 -- Plinko Labs
@@ -20987,7 +22664,7 @@ end
 
 return Type
 ]])
-mod("TypeDef", _17, [[
+mod("TypeDef", _19, [[
 -- Substance
 -- Particle/Type/TypeDef.lua
 -- Plinko Labs
@@ -21504,7 +23181,7 @@ end
 
 return TypeDef
 ]])
-mod("Types", _16, [[
+mod("Types", _18, [[
 -- Substance
 -- Particle/Types.lua
 -- Plinko Labs
@@ -21547,7 +23224,7 @@ export type Channel = {
 
 return {}
 ]])
-local _18 = mod("React", _14, [[
+local _20 = mod("React", _16, [[
 -- Substance
 -- React/init.lua
 -- Plinko Labs
@@ -21572,7 +23249,7 @@ end
 
 return React
 ]])
-mod("Entangle", _18, [[
+mod("Entangle", _20, [[
 -- Substance
 -- React/Entangle.lua
 -- Plinko Labs
@@ -21646,7 +23323,7 @@ end
 
 return Entangle
 ]])
-mod("Flux", _18, [[
+mod("Flux", _20, [[
 -- Substance
 -- React/Flux.lua
 -- Plinko Labs
@@ -21752,7 +23429,7 @@ end
 
 return Flux
 ]])
-mod("River", _18, [[
+mod("River", _20, [[
 -- Substance
 -- React/River.lua
 -- Plinko Labs
@@ -21816,7 +23493,7 @@ end
 
 return River
 ]])
-local _19 = mod("Tools", _14, [[
+local _21 = mod("Tools", _16, [[
 -- Substance
 -- Tools/init.lua
 -- Plinko Labs
@@ -21846,7 +23523,7 @@ end
 
 return Tools
 ]])
-mod("Batch", _19, [[
+mod("Batch", _21, [[
 -- Substance
 -- Tools/Batch.lua
 -- Plinko Labs
@@ -21880,7 +23557,7 @@ end
 
 return Batch
 ]])
-mod("Fission", _19, [[
+mod("Fission", _21, [[
 -- Substance
 -- Tools/Fission.lua
 -- Plinko Labs
@@ -21912,7 +23589,7 @@ end
 
 return Fission
 ]])
-mod("Fossil", _19, [[
+mod("Fossil", _21, [[
 -- Substance
 -- Tools/Fossil.lua
 -- Plinko Labs
@@ -21927,7 +23604,7 @@ return {
 	Clear = ParticleFossil.Clear,
 }
 ]])
-mod("Hooks", _19, [[
+mod("Hooks", _21, [[
 -- Substance
 -- Tools/Hooks.lua
 -- Plinko Labs
@@ -21939,7 +23616,7 @@ return {
 	Hook = ParticleHooks.Hook,
 }
 ]])
-mod("LandLine", _19, [[
+mod("LandLine", _21, [[
 -- Substance
 -- Tools/LandLine.lua
 -- Plinko Labs
@@ -21985,7 +23662,7 @@ end
 
 return LandLine
 ]])
-local _20 = mod("Switch", _1, [[
+local _22 = mod("Switch", _1, [[
 local Enums    = require(script.Enums)
 local Platform = require(script.Platform)
 local Context  = require(script.Context)
@@ -22076,7 +23753,7 @@ function Switch.OnContextChanged(cb: ({ string }) -> ()): () -> ()
 end
 
 return Switch]])
-mod("Action", _20, [[
+mod("Action", _22, [[
 -- Switch
 -- Action.lua
 -- Plinko Labs
@@ -22815,7 +24492,7 @@ function Action:Destroy()
 end
 
 return Action]])
-mod("Connection", _20, [[
+mod("Connection", _22, [[
 -- Switch
 -- Connection.lua
 -- Plinko Labs
@@ -22919,7 +24596,7 @@ return {
 	Connection = Connection,
 	Promise    = Promise,
 }]])
-mod("Context", _20, [[
+mod("Context", _22, [[
 -- Switch
 -- Context.lua
 -- Plinko Labs
@@ -23095,7 +24772,7 @@ function Context.OnChanged(cb: (stack: { string }) -> ()): () -> ()
 end
 
 return Context]])
-mod("Enums", _20, [[
+mod("Enums", _22, [[
 -- Switch
 -- Enums.lua
 -- Plinko Labs
@@ -23186,7 +24863,7 @@ Enums.Driver = {
 }
 
 return Enums]])
-mod("Platform", _20, [[
+mod("Platform", _22, [[
 -- Switch
 -- Platform.lua
 -- Plinko Labs
@@ -23261,7 +24938,7 @@ function Platform.OnChanged(cb: (new: Platform, prev: Platform) -> ()): () -> ()
 end
 
 return Platform]])
-mod("Promise", _20, [==[
+mod("Promise", _22, [==[
 --[[
 	An implementation of Promises similar to Promise/A+.
 ]]
@@ -25244,7 +26921,7 @@ function Promise.onUnhandledRejection(callback)
 end
 
 return Promise]==])
-mod("Registry", _20, [[
+mod("Registry", _22, [[
 -- Switch
 -- Registry.lua
 -- Plinko Labs
@@ -25380,7 +27057,7 @@ function Registry.All(): { Types.ActionHandle }
 end
 
 return Registry]])
-mod("Types", _20, [[
+mod("Types", _22, [[
 -- Switch
 -- Types.lua
 -- Plinko Labs
@@ -25475,7 +27152,7 @@ export type ActionHandle = {
 }
 
 return {}]])
-local _21 = mod("Terminal", _1, [[
+local _23 = mod("Terminal", _1, [[
 -- Karet.Terminal - the visible console surface (the Alacritty analogue).
 --
 -- Composes the window chrome, the scrolling Output log, and the Input row, drives them all
@@ -25983,7 +27660,7 @@ end
 
 return Terminal
 ]])
-mod("Input", _21, [[
+mod("Input", _23, [[
 -- the input row. a prompt + a real textbox, a coloured overlay behind it (so valid
 -- commands show up green-ish vs normal text), and the autocomplete dropdown with a
 -- signature line telling you which arg youre on.
@@ -26453,7 +28130,7 @@ end
 
 return Input
 ]])
-mod("Output", _21, [[
+mod("Output", _23, [[
 -- The terminal's scrolling output log. Each line is a TextLabel coloured by a semantic
 -- theme group (Output / Error / Warn / Info / Success / Comment for echoes), so a theme
 -- switch recolours the whole backlog. Lines remember their group, which is what lets
@@ -26563,7 +28240,7 @@ end
 
 return Output
 ]])
-mod("create", _21, [[
+mod("create", _23, [[
 -- Tiny declarative Instance builder for the terminal UI.
 --
 -- create("Frame", { Size = ..., Children = { ... }, Parent = ... }) sets every property,
@@ -26594,7 +28271,7 @@ end
 
 return create
 ]])
-local _22 = mod("Theme", _1, [[
+local _24 = mod("Theme", _1, [[
 -- Karet.Theme - one semantic colorscheme, piped through every surface (DESIGN → Theme).
 --
 -- A theme is NOT a set of raw frame colors; it is a set of *semantic highlight groups*
@@ -27030,7 +28707,7 @@ Theme.Set("tokyonight")
 
 return Theme
 ]])
-local _23 = mod("Types", _1, [[
+local _25 = mod("Types", _1, [[
 -- Karet's argument type system. A type knows how to Parse a raw token into a value, and
 -- to Validate that value. `coerce` tries a union of types left-to-right (the first that
 -- parses AND validates wins - GRAMMAR/DESIGN), so handlers never type-check. `satisfies`
@@ -27415,13 +29092,18 @@ function deps.Substance(): any?
 	return resolve("Substance")
 end
 
--- Iris - immediate-mode UI, used by Kaveat. Vendored under the Karet module.
+-- Iris - immediate-mode UI. Vendored under the Karet module.
 function deps.Iris(): any?
 	return resolve("Iris")
+end
+
+-- Highlighter - boatbombers luau syntax highlighter, used by Kaveat. vendored.
+function deps.Highlighter(): any?
+	return resolve("Highlighter")
 end
 
 return deps
 ]])
 
-print("[Karet] installed 86 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 92 modules under ReplicatedStorage.Karet")
 return true
