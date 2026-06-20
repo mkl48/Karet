@@ -23,6 +23,8 @@ Networking.__index = Networking
 
 local ATOM = "KaretCommandRequest"
 local CHANNEL = "KaretCommand"
+local KAVEAT_ATOM = "KaretKaveatRun"
+local KAVEAT_CHANNEL = "KaretKaveat"
 
 export type Request = {
 	name: string, -- command name
@@ -62,6 +64,22 @@ function Networking.new()
 		else
 			warn(`Karet.Networking: failed to define channel - {atomOrErr}`)
 		end
+
+		-- separate channel for running kaveat scripts
+		local ok2, kav = pcall(function()
+			local Type = self.substance.Type
+			local atom = self.substance.Define(KAVEAT_ATOM, {
+				source = Type.string(),
+				context = Type.string():nullable(),
+			})
+			atom:Compose(KAVEAT_CHANNEL, "Solve")
+			return atom
+		end)
+		if ok2 then
+			self.kaveatAtom = kav
+		else
+			warn(`Karet.Networking: failed to define kaveat channel - {kav}`)
+		end
 	end
 
 	return self
@@ -98,6 +116,38 @@ function Networking:listen(runner: (Request, any) -> Result)
 			return { ok = false, error = "Karet server not ready" }
 		end
 		local ok, result = pcall(self.runner, request, player)
+		if not ok then
+			return { ok = false, error = tostring(result) }
+		end
+		return result
+	end)
+end
+
+-- CLIENT: ship a kaveat script to the server to run, yield for the result.
+function Networking:invokeKaveat(source: string, context: string?): any
+	if not self.kaveatAtom then
+		return { ok = false, error = "kaveat networking unavailable (Substance not installed?)" }
+	end
+	local ok, result = pcall(function()
+		return self.kaveatAtom:Post({ source = source, context = context }):Await()
+	end)
+	if not ok then
+		return { ok = false, error = `network error: {result}` }
+	end
+	if type(result) ~= "table" then
+		return { ok = false, error = "malformed server response" }
+	end
+	return result
+end
+
+-- SERVER: handle incoming kaveat run requests. runner(payload, player) -> result.
+function Networking:listenKaveat(runner: (any, any) -> any)
+	if not self.kaveatAtom then
+		warn("Karet.Networking: cannot listen for kaveat - Substance unavailable")
+		return
+	end
+	self.kaveatAtom:Subscribe(function(payload: any, player: any): any
+		local ok, result = pcall(runner, payload, player)
 		if not ok then
 			return { ok = false, error = tostring(result) }
 		end

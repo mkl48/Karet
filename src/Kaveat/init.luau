@@ -693,6 +693,7 @@ function Kaveat:renderAc()
 				ImageRectSize = asset.ImageRectSize,
 				ImageRectOffset = asset.ImageRectOffset,
 				ImageColor3 = self:iconColor(s.detail),
+				ScaleType = Enum.ScaleType.Fit,
 				ZIndex = 11,
 				Parent = row,
 			})
@@ -720,12 +721,15 @@ function Kaveat:icon(detail: string): any?
 	if not self.lucide then
 		return nil
 	end
-	local name = ICONS[detail] or "file-code"
-	if self.iconCache[name] == nil then
-		local ok, asset = pcall(self.lucide.GetAsset, name, 48)
-		self.iconCache[name] = (ok and asset) or false
+	if self.iconCache[detail] == nil then
+		local name = ICONS[detail] or "file-code"
+		local ok, asset = pcall(self.lucide.GetAsset, name, 256)
+		if not ok then
+			ok, asset = pcall(self.lucide.GetAsset, "file-code", 256)
+		end
+		self.iconCache[detail] = (ok and asset) or false
 	end
-	return self.iconCache[name] or nil
+	return self.iconCache[detail] or nil
 end
 
 function Kaveat:iconColor(detail: string): Color3

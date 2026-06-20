@@ -56,6 +56,7 @@ export type StartConfig = {
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	DefaultRole: string?, -- server: default role for players
 	RateLimit: RateLimit?, -- server: rate limiting (reserved)
+	KaveatExec: (boolean | (player: Player) -> boolean)?, -- server: allow kaveat to run code (studio always allowed)
 }
 
 local Karet = {}
@@ -321,6 +322,14 @@ local function startClient(options: StartConfig)
 		editor:setStore(function()
 			return Karet.Profile.Kavs
 		end)
+		-- ctrl+enter / :run ships the script to the server to loadstring
+		editor:setRunner(function(source, _context)
+			local res = networking:invokeKaveat(source, _context)
+			if res.ok then
+				return res.output or "ran ok"
+			end
+			error(res.error or "run failed")
+		end)
 		Karet.Editor = editor
 	end
 
@@ -336,6 +345,7 @@ local function startServer(options: StartConfig)
 	end
 	Karet.Config.DefaultRole = auth.defaultRole
 	Karet.Config.RateLimit = options.RateLimit
+	Karet.Config.KaveatExec = options.KaveatExec
 
 	local networking = Networking.new()
 	local host = Host.new({
@@ -350,6 +360,37 @@ local function startServer(options: StartConfig)
 	})
 	networking:listen(function(request, player)
 		return host.runServerRequest(request, player)
+	end)
+
+	-- kaveat runs code with loadstring (server only). gated for safety: studio is always
+	-- allowed, otherwise Start{ KaveatExec = true } or KaveatExec = function(player) ... end.
+	-- WARNING: enabling this on a live game lets allowed clients run arbitrary server code.
+	local function kaveatAllowed(player): boolean
+		if RunService:IsStudio() then
+			return true
+		end
+		local ke = Karet.Config.KaveatExec
+		if type(ke) == "function" then
+			return ke(player) == true
+		end
+		return ke == true
+	end
+	networking:listenKaveat(function(payload, player)
+		if not kaveatAllowed(player) then
+			return { ok = false, error = "kaveat run is disabled here (server Start{ KaveatExec = true })" }
+		end
+		local okc, fn, compileErr = pcall(loadstring, payload.source)
+		if not okc then
+			return { ok = false, error = "loadstring is off (enable ServerScriptService.LoadStringEnabled)" }
+		end
+		if not fn then
+			return { ok = false, error = "compile error: " .. tostring(compileErr) }
+		end
+		local okr, result = pcall(fn)
+		if not okr then
+			return { ok = false, error = tostring(result) }
+		end
+		return { ok = true, output = result ~= nil and tostring(result) or "ran ok" }
 	end)
 
 	-- OnConnect middleware

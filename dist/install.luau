@@ -88,6 +88,7 @@ export type StartConfig = {
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	DefaultRole: string?, -- server: default role for players
 	RateLimit: RateLimit?, -- server: rate limiting (reserved)
+	KaveatExec: (boolean | (player: Player) -> boolean)?, -- server: allow kaveat to run code (studio always allowed)
 }
 
 local Karet = {}
@@ -353,6 +354,14 @@ local function startClient(options: StartConfig)
 		editor:setStore(function()
 			return Karet.Profile.Kavs
 		end)
+		-- ctrl+enter / :run ships the script to the server to loadstring
+		editor:setRunner(function(source, _context)
+			local res = networking:invokeKaveat(source, _context)
+			if res.ok then
+				return res.output or "ran ok"
+			end
+			error(res.error or "run failed")
+		end)
 		Karet.Editor = editor
 	end
 
@@ -368,6 +377,7 @@ local function startServer(options: StartConfig)
 	end
 	Karet.Config.DefaultRole = auth.defaultRole
 	Karet.Config.RateLimit = options.RateLimit
+	Karet.Config.KaveatExec = options.KaveatExec
 
 	local networking = Networking.new()
 	local host = Host.new({
@@ -382,6 +392,37 @@ local function startServer(options: StartConfig)
 	})
 	networking:listen(function(request, player)
 		return host.runServerRequest(request, player)
+	end)
+
+	-- kaveat runs code with loadstring (server only). gated for safety: studio is always
+	-- allowed, otherwise Start{ KaveatExec = true } or KaveatExec = function(player) ... end.
+	-- WARNING: enabling this on a live game lets allowed clients run arbitrary server code.
+	local function kaveatAllowed(player): boolean
+		if RunService:IsStudio() then
+			return true
+		end
+		local ke = Karet.Config.KaveatExec
+		if type(ke) == "function" then
+			return ke(player) == true
+		end
+		return ke == true
+	end
+	networking:listenKaveat(function(payload, player)
+		if not kaveatAllowed(player) then
+			return { ok = false, error = "kaveat run is disabled here (server Start{ KaveatExec = true })" }
+		end
+		local okc, fn, compileErr = pcall(loadstring, payload.source)
+		if not okc then
+			return { ok = false, error = "loadstring is off (enable ServerScriptService.LoadStringEnabled)" }
+		end
+		if not fn then
+			return { ok = false, error = "compile error: " .. tostring(compileErr) }
+		end
+		local okr, result = pcall(fn)
+		if not okr then
+			return { ok = false, error = tostring(result) }
+		end
+		return { ok = true, output = result ~= nil and tostring(result) or "ran ok" }
 	end)
 
 	-- OnConnect middleware
@@ -17387,6 +17428,7 @@ function Kaveat:renderAc()
 				ImageRectSize = asset.ImageRectSize,
 				ImageRectOffset = asset.ImageRectOffset,
 				ImageColor3 = self:iconColor(s.detail),
+				ScaleType = Enum.ScaleType.Fit,
 				ZIndex = 11,
 				Parent = row,
 			})
@@ -17414,12 +17456,15 @@ function Kaveat:icon(detail: string): any?
 	if not self.lucide then
 		return nil
 	end
-	local name = ICONS[detail] or "file-code"
-	if self.iconCache[name] == nil then
-		local ok, asset = pcall(self.lucide.GetAsset, name, 48)
-		self.iconCache[name] = (ok and asset) or false
+	if self.iconCache[detail] == nil then
+		local name = ICONS[detail] or "file-code"
+		local ok, asset = pcall(self.lucide.GetAsset, name, 256)
+		if not ok then
+			ok, asset = pcall(self.lucide.GetAsset, "file-code", 256)
+		end
+		self.iconCache[detail] = (ok and asset) or false
 	end
-	return self.iconCache[name] or nil
+	return self.iconCache[detail] or nil
 end
 
 function Kaveat:iconColor(detail: string): Color3
@@ -18297,6 +18342,8 @@ Networking.__index = Networking
 
 local ATOM = "KaretCommandRequest"
 local CHANNEL = "KaretCommand"
+local KAVEAT_ATOM = "KaretKaveatRun"
+local KAVEAT_CHANNEL = "KaretKaveat"
 
 export type Request = {
 	name: string, -- command name
@@ -18336,6 +18383,22 @@ function Networking.new()
 		else
 			warn(`Karet.Networking: failed to define channel - {atomOrErr}`)
 		end
+
+		-- separate channel for running kaveat scripts
+		local ok2, kav = pcall(function()
+			local Type = self.substance.Type
+			local atom = self.substance.Define(KAVEAT_ATOM, {
+				source = Type.string(),
+				context = Type.string():nullable(),
+			})
+			atom:Compose(KAVEAT_CHANNEL, "Solve")
+			return atom
+		end)
+		if ok2 then
+			self.kaveatAtom = kav
+		else
+			warn(`Karet.Networking: failed to define kaveat channel - {kav}`)
+		end
 	end
 
 	return self
@@ -18372,6 +18435,38 @@ function Networking:listen(runner: (Request, any) -> Result)
 			return { ok = false, error = "Karet server not ready" }
 		end
 		local ok, result = pcall(self.runner, request, player)
+		if not ok then
+			return { ok = false, error = tostring(result) }
+		end
+		return result
+	end)
+end
+
+-- CLIENT: ship a kaveat script to the server to run, yield for the result.
+function Networking:invokeKaveat(source: string, context: string?): any
+	if not self.kaveatAtom then
+		return { ok = false, error = "kaveat networking unavailable (Substance not installed?)" }
+	end
+	local ok, result = pcall(function()
+		return self.kaveatAtom:Post({ source = source, context = context }):Await()
+	end)
+	if not ok then
+		return { ok = false, error = `network error: {result}` }
+	end
+	if type(result) ~= "table" then
+		return { ok = false, error = "malformed server response" }
+	end
+	return result
+end
+
+-- SERVER: handle incoming kaveat run requests. runner(payload, player) -> result.
+function Networking:listenKaveat(runner: (any, any) -> any)
+	if not self.kaveatAtom then
+		warn("Karet.Networking: cannot listen for kaveat - Substance unavailable")
+		return
+	end
+	self.kaveatAtom:Subscribe(function(payload: any, player: any): any
+		local ok, result = pcall(runner, payload, player)
 		if not ok then
 			return { ok = false, error = tostring(result) }
 		end
