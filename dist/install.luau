@@ -56,7 +56,7 @@ local Query = require(script.Query)
 local Profile = require(script.Profile)
 local Complete = require(script.Complete)
 local ContextMod = require(script.Context)
-local Prompt = require(script.Prompt)
+local Render = require(script.Render)
 
 -- ---------------------------------------------------------------------------
 -- public types (exported so editors autocomplete config + params)
@@ -133,6 +133,10 @@ Karet.Terminal = Terminal
 
 -- Kaveat, the built-in Luau editor (scaffold). Enable with Start{ Kaveat = true }.
 Karet.Kaveat = Kaveat
+
+-- The rich-output toolkit (panels, tables, trees, charts, ...). Pure string builders, also
+-- handed to handlers as ctx.UI. Karet.Render.table{...} etc. work anywhere.
+Karet.Render = Render
 
 -- Global key/value cache + named-query service, also reachable from handlers as
 -- ctx.Cache / ctx.Query. One instance per realm.
@@ -312,13 +316,13 @@ local function startClient(options: StartConfig)
 		end
 	end
 
-	-- Dangerous-command confirmation. "window" pops an Iris modal (falls back to text if Iris
-	-- isn't around); "text" (default) asks y/N right on the terminal. Both yield until answered.
+	-- Dangerous-command confirmation. "window" pops a small themed modal; "text" (default)
+	-- asks y/N right on the terminal. Both yield the command's thread until answered.
 	local promptType = options.PromptType or "text"
 	local function confirm(name: string, _def: any): boolean
 		local question = `run dangerous command '{name}'?`
-		if promptType == "window" and Prompt.available() then
-			return Prompt.window(question, terminal.gui.Parent)
+		if promptType == "window" then
+			return terminal:promptWindow(question)
 		end
 		return terminal:promptText(question)
 	end
@@ -340,6 +344,7 @@ local function startClient(options: StartConfig)
 		indicator = function(indicatorOpts)
 			return terminal:indicator(indicatorOpts)
 		end,
+		ui = terminal:ui(),
 		confirm = confirm,
 	})
 	local evaluator = Shell.newEvaluator(host)
@@ -352,15 +357,22 @@ local function startClient(options: StartConfig)
 			end
 			return
 		end
-		host.session.rawInput = line
-		local ok, result = pcall(function()
-			return evaluator:run(parsed.ast)
+		-- run the command on its OWN thread, not the input's submit thread. commands that
+		-- yield (a dangerous-command prompt waiting for an answer, a progress bar's task.wait,
+		-- a Server round-trip) need a thread that can suspend and resume cleanly - the submit
+		-- thread can't, which is why the prompts never waited before. the input stays usable
+		-- the whole time.
+		task.spawn(function()
+			host.session.rawInput = line
+			local ok, result = pcall(function()
+				return evaluator:run(parsed.ast)
+			end)
+			if not ok then
+				terminal:error(tostring(result))
+			elseif type(result) == "table" and result.ok == false and result.error then
+				terminal:error(result.error)
+			end
 		end)
-		if not ok then
-			terminal:error(tostring(result))
-		elseif type(result) == "table" and result.ok == false and result.error then
-			terminal:error(result.error)
-		end
 	end)
 
 	-- kaveat editor, mounted beside the terminal if enabled
@@ -844,6 +856,46 @@ function Commands.build(services: Services): { any }
 		},
 
 		{
+			Name = "ui",
+			Description = "show off the rich terminal output (panels, tables, charts...)",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local UI = ctx.UI
+				UI.Rule("karet ui")
+				UI.Panel({ "a bordered panel.", "monospaced, themed,", "multi-line." }, { title = "panel" })
+				UI.Table({
+					headers = { "name", "role", "ping" },
+					rows = {
+						{ "alice", "admin", "24ms" },
+						{ "bob", "user", "57ms" },
+						{ "carol", "mod", "31ms" },
+					},
+				})
+				UI.Fields({
+					{ "os", "Roblox" },
+					{ "shell", "karet" },
+					{ "theme", "tokyonight" },
+					{ "uptime", "12m" },
+				})
+				UI.Tree({
+					label = "game",
+					children = {
+						{ label = "Workspace", children = { "Baseplate", "Spawn" } },
+						{ label = "Players", children = { "alice", "bob" } },
+					},
+				})
+				UI.List({
+					{ text = "connected", status = "ok" },
+					{ text = "loaded assets", status = "ok" },
+					{ text = "missing texture", status = "warn" },
+					{ text = "failed to join", status = "fail" },
+				})
+				UI.BarChart({ { "cpu", 82 }, { "mem", 61 }, { "net", 37 } }, { max = 100 })
+				UI.Markup(`fps {UI.Sparkline({ 30, 42, 51, 48, 60, 58, 59, 60 })}  {UI.Badge("60", { color = "Success" })}`)
+			end },
+		},
+
+		{
 			Name = "danger",
 			Description = "example dangerous command (asks to confirm first)",
 			Network = "Client",
@@ -1004,6 +1056,11 @@ local NOOP_INDICATOR = setmetatable({}, { __index = function()
 	end
 end })
 
+-- Same idea for the rich-output toolkit (ctx.UI): off the terminal every method is a no-op.
+local NOOP_UI = setmetatable({}, { __index = function()
+	return function() end
+end })
+
 export type Options = {
 	player: any?, -- Player or nil (Studio/no-player)
 	command: string,
@@ -1018,6 +1075,7 @@ export type Options = {
 	cache: any?, -- the global Karet.Cache
 	query: any?, -- the global Karet.Query
 	indicator: ((opts: any) -> any)?, -- builds a terminal indicator (client/terminal only)
+	ui: ({ [string]: any })?, -- the rich-output toolkit (panels/tables/...), terminal only
 }
 
 export type Control = {
@@ -1040,6 +1098,7 @@ export type Context = {
 	Rank: number?,
 	Cache: any, -- Karet.Cache
 	Query: any, -- Karet.Query
+	UI: { [string]: any }, -- rich output toolkit (no-op off the terminal)
 	Print: (message: any) -> (),
 	Warn: (message: any) -> (),
 	Err: (message: any) -> (),
@@ -1078,6 +1137,7 @@ function Context.new(opts: Options): (any, Control)
 		Rank = opts.rank,
 		Cache = opts.cache, -- global key/value cache (ctx.Cache:Get/Set/...)
 		Query = opts.query, -- named-query service (ctx.Query:Run("players"))
+		UI = opts.ui or NOOP_UI, -- rich output: ctx.UI.Table{...}, ctx.UI.Panel(...), ...
 	}
 
 	function ctx.Print(message: any)
@@ -2697,6 +2757,7 @@ export type Options = {
 	auth: Auth?,
 	networking: any?,
 	indicator: ((opts: any) -> any)?, -- terminal indicator factory (client only)
+	ui: ({ [string]: any })?, -- rich-output toolkit (client only)
 	confirm: ((name: string, def: any) -> boolean)?, -- dangerous-command gate (client only)
 }
 
@@ -2709,6 +2770,7 @@ function Host.new(opts: Options)
 	local cache = opts.cache
 	local query = opts.query
 	local indicator = opts.indicator
+	local ui = opts.ui
 	local confirm = opts.confirm
 	local isServer = opts.isServer == true
 	local isClient = opts.isClient == true
@@ -2803,6 +2865,7 @@ function Host.new(opts: Options)
 			cache = cache,
 			query = query,
 			indicator = indicator,
+			ui = ui,
 		})
 
 		for _, pre in hooks.pre do
@@ -18934,90 +18997,7 @@ end
 
 return Profile
 ]])
-local _16 = mod("Prompt", _1, [[
--- Prompt - the dangerous-command confirmation in "window" mode (Iris). The terminal handles
--- the "text" mode itself (Terminal:promptText); this is the graphical y/n modal.
---
--- Iris is immediate-mode, so we Init once, keep a single pending question in module state,
--- and a connected render fn draws the modal whenever something is pending. Prompt.window()
--- parks the calling thread until a button resolves it. Client-only (Iris is client-only);
--- callers should fall back to text mode when Prompt.available() is false.
-
-local deps = require(script.Parent.deps)
-
-local Prompt = {}
-
-local iris: any = nil
-local started = false
-local pending: { question: string, resolve: (boolean) -> () }? = nil
-
--- Is the Iris dependency present? (lets the caller pick text mode when it isn't)
-function Prompt.available(): boolean
-	return deps.Iris() ~= nil
-end
-
-local function render()
-	if not pending then
-		return
-	end
-	local q = pending
-	local ok = pcall(function()
-		-- no close/collapse, so the only way out is a button (otherwise the command hangs)
-		local args = iris.Args.Window
-		iris.Window({ "Karet", [args.NoClose] = true, [args.NoCollapse] = true })
-		iris.Text({ q.question })
-		iris.Text({ "" })
-		iris.SameLine()
-		local yes = iris.Button({ "Yes" })
-		local no = iris.Button({ "No, cancel" })
-		iris.End()
-		iris.End()
-		-- resolve once, after the row is built, so both handles are valid
-		if yes.clicked() then
-			pending = nil
-			q.resolve(true)
-		elseif no.clicked() then
-			pending = nil
-			q.resolve(false)
-		end
-	end)
-	if not ok and pending then
-		-- if Iris blew up, don't hang the command forever
-		pending = nil
-		q.resolve(false)
-	end
-end
-
-local function ensureStarted(parent: Instance?)
-	if started then
-		return
-	end
-	iris = deps.Iris()
-	-- allowMultipleInits = true so we never error if the host game also uses Iris
-	pcall(iris.Init, parent, nil, true)
-	iris:Connect(render)
-	started = true
-end
-
--- Show a yes/no modal and yield until the user answers. Returns true only on "Yes".
-function Prompt.window(question: string, parent: Instance?): boolean
-	if not Prompt.available() then
-		return true -- no Iris: treat as confirmed rather than blocking the command
-	end
-	ensureStarted(parent)
-	local thread = coroutine.running()
-	pending = {
-		question = question,
-		resolve = function(v: boolean)
-			task.spawn(thread, v)
-		end,
-	}
-	return coroutine.yield()
-end
-
-return Prompt
-]])
-local _17 = mod("Query", _1, [[
+local _16 = mod("Query", _1, [[
 -- A named-query registry. Karet (and your game) registers providers - "players", "teams",
 -- "commands", whatever - and commands run them by name through ctx.Query. This gives
 -- commands a uniform way to look things up without each one re-implementing resolution.
@@ -19069,7 +19049,7 @@ end
 
 return Query
 ]])
-local _18 = mod("Registry", _1, [[
+local _17 = mod("Registry", _1, [[
 -- The command registry. Holds command definitions, resolves names + aliases
 -- (case-insensitively), and offers the fluent builder (sugar over the table form).
 --
@@ -19241,6 +19221,439 @@ function Builder:Register(): Definition
 end
 
 return Registry
+]])
+local _18 = mod("Render", _1, [[
+-- Render - the terminal eye-candy toolkit. pure string builders that turn data into the
+-- rich, box-drawn, coloured blocks you see in a real terminal: panels, tables, trees,
+-- key/value cards (neofetch style), bar charts, sparklines, rules, badges, side-by-side
+-- columns. every function returns a RichText string (one or more \n lines), themed off the
+-- active Karet.Theme but fully overridable per call.
+--
+-- these are PURE (no Roblox UI, just Color3 + the theme), so they're reachable as
+-- Karet.Render.* anywhere and as ctx.UI.* (which also prints them to the terminal). the
+-- terminal renders them in a monospaced font, so column alignment is done by character
+-- count (utf8-aware, so box chars line up).
+
+local Theme = require(script.Parent.Theme)
+
+local Render = {}
+
+-- ---------------------------------------------------------------------------
+-- low-level helpers
+-- ---------------------------------------------------------------------------
+
+local function rgb(c: Color3): string
+	return string.format("rgb(%d,%d,%d)", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+
+local function esc(s: string): string
+	return (string.gsub(string.gsub(string.gsub(tostring(s), "&", "&amp;"), "<", "&lt;"), ">", "&gt;"))
+end
+
+-- resolve a colour input: a Color3, a hex string, or a theme group name ("Accent")
+local function toColor(v: any): Color3?
+	if typeof(v) == "Color3" then
+		return v
+	elseif type(v) == "string" then
+		local pal = Theme.Get()
+		if pal[v] then
+			return pal[v]
+		end
+		local ok, c = pcall(Color3.fromHex, (string.gsub(v, "^#", "")))
+		if ok then
+			return c
+		end
+	end
+	return nil
+end
+
+local function span(text: string, color: Color3): string
+	return `<font color="{rgb(color)}">{esc(text)}</font>`
+end
+
+-- visible width of a string, ignoring rich <font> tags and counting unicode glyphs once
+local function vlen(s: string): number
+	local stripped = string.gsub(s, "<[^>]->", "")
+	return utf8.len(stripped) or #stripped
+end
+
+local function padR(s: string, w: number): string
+	local n = vlen(s)
+	return n >= w and s or s .. string.rep(" ", w - n)
+end
+
+local function padL(s: string, w: number): string
+	local n = vlen(s)
+	return n >= w and s or string.rep(" ", w - n) .. s
+end
+
+local function splitLines(s: any): { string }
+	if type(s) == "table" then
+		return s
+	end
+	local out = {}
+	for line in string.gmatch(tostring(s) .. "\n", "(.-)\n") do
+		table.insert(out, line)
+	end
+	return out
+end
+
+-- ---------------------------------------------------------------------------
+-- rules / dividers
+-- ---------------------------------------------------------------------------
+
+-- a horizontal divider, optionally with a centred label: ──── label ────
+function Render.rule(label: string?, opts: { [string]: any }?): string
+	opts = opts or {}
+	local p = Theme.Get()
+	local color = toColor(opts.color) or p.Border
+	local width = opts.width or 48
+	local ch = opts.char or "─"
+	if not label or label == "" then
+		return span(string.rep(ch, width), color)
+	end
+	local lab = " " .. label .. " "
+	local left = math.max(0, math.floor((width - vlen(lab)) / 2))
+	local right = math.max(0, width - vlen(lab) - left)
+	return span(string.rep(ch, left), color) .. span(lab, toColor(opts.label) or p.Accent) .. span(string.rep(ch, right), color)
+end
+
+-- ---------------------------------------------------------------------------
+-- panels / boxes
+-- ---------------------------------------------------------------------------
+
+-- a bordered box around content (string or {lines}), with an optional title in the top edge
+function Render.panel(content: any, opts: { [string]: any }?): string
+	opts = opts or {}
+	local p = Theme.Get()
+	local bc = toColor(opts.color) or p.Border
+	local tc = toColor(opts.titleColor) or p.Accent
+	local fc = toColor(opts.text) or p.Foreground
+	local lines = splitLines(content)
+
+	local inner = opts.width or 0
+	for _, l in lines do
+		inner = math.max(inner, vlen(l))
+	end
+	if opts.title then
+		inner = math.max(inner, vlen(opts.title) + 4)
+	end
+
+	local out = {}
+	if opts.title then
+		local fill = inner + 2 - (vlen(opts.title) + 3)
+		table.insert(
+			out,
+			span("┌─ ", bc) .. span(opts.title, tc) .. span(" " .. string.rep("─", math.max(0, fill)) .. "┐", bc)
+		)
+	else
+		table.insert(out, span("┌" .. string.rep("─", inner + 2) .. "┐", bc))
+	end
+	for _, l in lines do
+		table.insert(out, span("│ ", bc) .. span(padR(l, inner), fc) .. span(" │", bc))
+	end
+	table.insert(out, span("└" .. string.rep("─", inner + 2) .. "┘", bc))
+	return table.concat(out, "\n")
+end
+
+-- ---------------------------------------------------------------------------
+-- tables
+-- ---------------------------------------------------------------------------
+
+-- a box-drawn table. opts = { headers = {..}, rows = {{..},..}, border = true?, color?, ... }
+-- pass border = false for a lighter header-underline-only style.
+function Render.table(opts: { [string]: any }): string
+	local p = Theme.Get()
+	local bc = toColor(opts.color) or p.Border
+	local hc = toColor(opts.headerColor) or p.Accent
+	local fc = toColor(opts.text) or p.Foreground
+	local headers = opts.headers or {}
+	local rows = opts.rows or {}
+	local border = opts.border ~= false
+
+	-- column count + widths
+	local cols = #headers
+	for _, r in rows do
+		cols = math.max(cols, #r)
+	end
+	local w = table.create(cols, 0)
+	for i = 1, cols do
+		w[i] = vlen(tostring(headers[i] or ""))
+	end
+	for _, r in rows do
+		for i = 1, cols do
+			w[i] = math.max(w[i], vlen(tostring(r[i] or "")))
+		end
+	end
+
+	local out = {}
+	local function bar(l: string, m: string, r: string)
+		local segs = {}
+		for i = 1, cols do
+			table.insert(segs, string.rep("─", w[i] + 2))
+		end
+		return span(l .. table.concat(segs, m) .. r, bc)
+	end
+	local function rowLine(cells: { any }, color: Color3)
+		local segs = { span("│", bc) }
+		for i = 1, cols do
+			table.insert(segs, span(" " .. padR(tostring(cells[i] or ""), w[i]) .. " ", color))
+			table.insert(segs, span("│", bc))
+		end
+		return table.concat(segs)
+	end
+
+	if border then
+		table.insert(out, bar("┌", "┬", "┐"))
+		if #headers > 0 then
+			table.insert(out, rowLine(headers, hc))
+			table.insert(out, bar("├", "┼", "┤"))
+		end
+		for _, r in rows do
+			table.insert(out, rowLine(r, fc))
+		end
+		table.insert(out, bar("└", "┴", "┘"))
+	else
+		if #headers > 0 then
+			local segs = {}
+			for i = 1, cols do
+				table.insert(segs, span(padR(tostring(headers[i] or ""), w[i]), hc))
+			end
+			table.insert(out, table.concat(segs, span("  ", bc)))
+			local total = 0
+			for i = 1, cols do
+				total += w[i] + 2
+			end
+			table.insert(out, span(string.rep("─", math.max(0, total - 2)), bc))
+		end
+		for _, r in rows do
+			local segs = {}
+			for i = 1, cols do
+				table.insert(segs, span(padR(tostring(r[i] or ""), w[i]), fc))
+			end
+			table.insert(out, table.concat(segs, "  "))
+		end
+	end
+	return table.concat(out, "\n")
+end
+
+-- ---------------------------------------------------------------------------
+-- trees
+-- ---------------------------------------------------------------------------
+
+-- a tree view. node = string, or { label = "..", children = { node, .. } }. nested freely.
+function Render.tree(node: any, opts: { [string]: any }?): string
+	opts = opts or {}
+	local p = Theme.Get()
+	local branch = toColor(opts.color) or p.Muted
+	local fc = toColor(opts.text) or p.Foreground
+	local rootColor = toColor(opts.rootColor) or p.Accent
+	local out = {}
+
+	local function label(n: any): string
+		return type(n) == "table" and tostring(n.label) or tostring(n)
+	end
+	local function kids(n: any): { any }?
+		return type(n) == "table" and n.children or nil
+	end
+
+	local function walk(n: any, prefix: string, isLast: boolean, isRoot: boolean)
+		if isRoot then
+			table.insert(out, span(label(n), rootColor))
+		else
+			table.insert(out, span(prefix .. (isLast and "└─ " or "├─ "), branch) .. span(label(n), fc))
+		end
+		local children = kids(n)
+		if children then
+			local childPrefix = isRoot and "" or (prefix .. (isLast and "   " or "│  "))
+			for i, c in children do
+				walk(c, childPrefix, i == #children, false)
+			end
+		end
+	end
+	walk(node, "", true, true)
+	return table.concat(out, "\n")
+end
+
+-- ---------------------------------------------------------------------------
+-- key/value cards (the neofetch look)
+-- ---------------------------------------------------------------------------
+
+-- aligned key : value pairs. items = { { "Key", "Value" }, .. } or { Key = "Value", .. }
+function Render.fields(items: any, opts: { [string]: any }?): string
+	opts = opts or {}
+	local p = Theme.Get()
+	local kc = toColor(opts.keyColor) or p.Accent
+	local vc = toColor(opts.text) or p.Foreground
+	local sc = toColor(opts.sepColor) or p.Muted
+	local sep = opts.sep or " : "
+
+	-- normalise to an ordered array of {key, value}
+	local pairs_ = {}
+	if items[1] ~= nil then
+		for _, kv in items do
+			table.insert(pairs_, { tostring(kv[1]), tostring(kv[2]) })
+		end
+	else
+		for k, v in items do
+			table.insert(pairs_, { tostring(k), tostring(v) })
+		end
+		table.sort(pairs_, function(a, b)
+			return a[1] < b[1]
+		end)
+	end
+
+	local kw = 0
+	for _, kv in pairs_ do
+		kw = math.max(kw, vlen(kv[1]))
+	end
+	local out = {}
+	for _, kv in pairs_ do
+		table.insert(out, span(padR(kv[1], kw), kc) .. span(sep, sc) .. span(kv[2], vc))
+	end
+	return table.concat(out, "\n")
+end
+
+-- ---------------------------------------------------------------------------
+-- lists / checklists
+-- ---------------------------------------------------------------------------
+
+local LIST_ICONS = {
+	ok = { "✓", "Success" },
+	done = { "✓", "Success" },
+	fail = { "✗", "Error" },
+	err = { "✗", "Error" },
+	warn = { "!", "Warn" },
+	pending = { "…", "Muted" },
+	info = { "•", "Accent" },
+	bullet = { "•", "Muted" },
+}
+
+-- a status list. items = { "text", .. } or { { text = "..", status = "ok"/"fail"/.. }, .. }
+function Render.list(items: { any }, opts: { [string]: any }?): string
+	opts = opts or {}
+	local p = Theme.Get()
+	local fc = toColor(opts.text) or p.Foreground
+	local out = {}
+	for _, it in items do
+		local text, status
+		if type(it) == "table" then
+			text, status = tostring(it.text or it[1]), it.status or it[2]
+		else
+			text, status = tostring(it), "bullet"
+		end
+		local def = LIST_ICONS[status or "bullet"] or LIST_ICONS.bullet
+		local ic = toColor(def[2]) or p.Muted
+		table.insert(out, span(def[1] .. " ", ic) .. span(text, fc))
+	end
+	return table.concat(out, "\n")
+end
+
+-- ---------------------------------------------------------------------------
+-- charts
+-- ---------------------------------------------------------------------------
+
+local SPARK = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
+
+-- a tiny inline chart from a list of numbers: ▁▂▄▆█▆▄▂
+function Render.sparkline(numbers: { number }, opts: { [string]: any }?): string
+	opts = opts or {}
+	local p = Theme.Get()
+	local color = toColor(opts.color) or p.Accent
+	if #numbers == 0 then
+		return ""
+	end
+	local lo, hi = math.huge, -math.huge
+	for _, n in numbers do
+		lo, hi = math.min(lo, n), math.max(hi, n)
+	end
+	local range = hi - lo
+	local chars = {}
+	for _, n in numbers do
+		local idx = range == 0 and 4 or (math.floor((n - lo) / range * (#SPARK - 1) + 0.5) + 1)
+		table.insert(chars, SPARK[idx])
+	end
+	return span(table.concat(chars), color)
+end
+
+-- a horizontal bar chart. items = { { "label", value }, .. }. opts.width = bar cells.
+function Render.barchart(items: { any }, opts: { [string]: any }?): string
+	opts = opts or {}
+	local p = Theme.Get()
+	local lc = toColor(opts.labelColor) or p.Accent
+	local fillc = toColor(opts.color) or p.Accent
+	local emptyc = toColor(opts.empty) or p.Muted
+	local vc = toColor(opts.text) or p.Foreground
+	local width = opts.width or 24
+	local fillCh, emptyCh = opts.fill or "█", opts.emptyChar or "░"
+
+	local lw, maxv = 0, opts.max or -math.huge
+	for _, it in items do
+		lw = math.max(lw, vlen(tostring(it[1])))
+		if not opts.max then
+			maxv = math.max(maxv, it[2])
+		end
+	end
+	if maxv <= 0 then
+		maxv = 1
+	end
+
+	local out = {}
+	for _, it in items do
+		local frac = math.clamp(it[2] / maxv, 0, 1)
+		local cells = math.floor(frac * width + 0.5)
+		local bar = span(string.rep(fillCh, cells), fillc) .. span(string.rep(emptyCh, width - cells), emptyc)
+		table.insert(out, span(padR(tostring(it[1]), lw), lc) .. " " .. bar .. " " .. span(tostring(it[2]), vc))
+	end
+	return table.concat(out, "\n")
+end
+
+-- ---------------------------------------------------------------------------
+-- inline bits + layout
+-- ---------------------------------------------------------------------------
+
+-- an inline coloured tag: [label]
+function Render.badge(text: string, opts: { [string]: any }?): string
+	opts = opts or {}
+	local p = Theme.Get()
+	local color = toColor(opts.color) or p.Accent
+	local bracket = toColor(opts.bracket) or p.Muted
+	return span("[", bracket) .. span(tostring(text), color) .. span("]", bracket)
+end
+
+-- colour a chunk of text (Color3 / hex / theme group). handy inside ctx.UI.Markup.
+function Render.color(text: string, color: any): string
+	return span(tostring(text), toColor(color) or Theme.Get().Foreground)
+end
+
+-- lay blocks side by side: columns({ asciiArt, fields }, { gap = 3 }). rich-safe (it pads
+-- by visible width), so this is how you get the neofetch art-beside-specs layout.
+function Render.columns(blocks: { any }, opts: { [string]: any }?): string
+	opts = opts or {}
+	local gap = string.rep(" ", opts.gap or 2)
+	local cols, widths, height = {}, {}, 0
+	for i, b in blocks do
+		local lines = splitLines(b)
+		cols[i] = lines
+		local w = 0
+		for _, l in lines do
+			w = math.max(w, vlen(l))
+		end
+		widths[i] = w
+		height = math.max(height, #lines)
+	end
+	local out = {}
+	for row = 1, height do
+		local cells = {}
+		for i, lines in cols do
+			table.insert(cells, padR(lines[row] or "", widths[i]))
+		end
+		table.insert(out, table.concat(cells, gap))
+	end
+	return table.concat(out, "\n")
+end
+
+return Render
 ]])
 local _19 = mod("Shell", _1, [[
 -- The Karet shell: the tokenizer + parser + evaluator that turn a line of input into an
@@ -28458,6 +28871,7 @@ local create = require(script.create)
 local Output = require(script.Output)
 local Input = require(script.Input)
 local Indicators = require(script.Parent.Indicators)
+local Render = require(script.Parent.Render)
 
 local Terminal = {}
 Terminal.__index = Terminal
@@ -28478,7 +28892,10 @@ export type Terminal = {
 	info: (self: Terminal, text: string) -> (),
 	success: (self: Terminal, text: string) -> (),
 	indicator: (self: Terminal, opts: { [string]: any }?) -> any,
+	printRich: (self: Terminal, richText: string, group: string?) -> (),
+	ui: (self: Terminal) -> { [string]: any },
 	promptText: (self: Terminal, question: string) -> boolean,
+	promptWindow: (self: Terminal, question: string) -> boolean,
 	clear: (self: Terminal) -> (),
 	onSubmit: (self: Terminal, fn: (string) -> ()) -> (),
 	destroy: (self: Terminal) -> (),
@@ -28789,8 +29206,146 @@ function Terminal:promptText(question: string): boolean
 		local a = string.lower((string.gsub(line, "%s", "")))
 		task.spawn(thread, a == "y" or a == "yes")
 	end
-	-- the box just lost focus on submit; grab it back so the answer can be typed
-	self.input:focus()
+	-- make sure the box has focus so the answer can be typed
+	task.defer(function()
+		self.input:focus()
+	end)
+	return coroutine.yield()
+end
+
+-- ---------------------------------------------------------------------------
+-- modal confirm (the "window" prompt) - a small themed dialog, built once and reused
+-- ---------------------------------------------------------------------------
+
+function Terminal:buildPromptModal()
+	local title = create("TextLabel", {
+		Name = "Title",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -24, 0, 22),
+		Position = UDim2.new(0, 14, 0, 12),
+		Font = Enum.Font.Code,
+		TextSize = 15,
+		Text = "⚠  confirm",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+	}) :: TextLabel
+	local message = create("TextLabel", {
+		Name = "Message",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -28, 0, 44),
+		Position = UDim2.new(0, 14, 0, 38),
+		Font = Enum.Font.Code,
+		TextSize = 14,
+		Text = "",
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+	}) :: TextLabel
+
+	local function button(name: string, text: string, x: number)
+		return create("TextButton", {
+			Name = name,
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(1, 1),
+			Size = UDim2.new(0, 92, 0, 28),
+			Position = UDim2.new(1, x, 1, -12),
+			Font = Enum.Font.Code,
+			TextSize = 14,
+			Text = text,
+			Children = { create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+		}) :: TextButton
+	end
+	local noBtn = button("No", "cancel", -14)
+	local yesBtn = button("Yes", "run", -114)
+
+	local cardStroke = create("UIStroke", { Thickness = 1 })
+	local card = create("Frame", {
+		Name = "Card",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(360, 150),
+		BorderSizePixel = 0,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 10) }),
+			cardStroke,
+			title,
+			message,
+			yesBtn,
+			noBtn,
+		},
+	})
+	local overlay = create("Frame", {
+		Name = "PromptOverlay",
+		Visible = false,
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0.45,
+		BorderSizePixel = 0,
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 100,
+		Children = { card },
+		Parent = self.window,
+	})
+
+	self.promptModal = {
+		overlay = overlay,
+		card = card,
+		cardStroke = cardStroke,
+		title = title,
+		message = message,
+		yes = yesBtn,
+		no = noBtn,
+	}
+
+	yesBtn.MouseButton1Click:Connect(function()
+		if self.promptResolve then
+			self.promptResolve(true)
+		end
+	end)
+	noBtn.MouseButton1Click:Connect(function()
+		if self.promptResolve then
+			self.promptResolve(false)
+		end
+	end)
+
+	self:colorPromptModal()
+end
+
+function Terminal:colorPromptModal()
+	local m = self.promptModal
+	if not m or not self.palette then
+		return
+	end
+	local p = self.palette
+	m.card.BackgroundColor3 = p.Surface
+	m.cardStroke.Color = p.Border
+	m.title.TextColor3 = p.Warn
+	m.message.TextColor3 = p.Foreground
+	m.yes.BackgroundColor3 = p.Error
+	m.yes.TextColor3 = p.Background
+	m.no.BackgroundColor3 = p.Background
+	m.no.TextColor3 = p.Foreground
+end
+
+-- Show the modal confirm and yield until a button is clicked. Returns true on "run".
+function Terminal:promptWindow(question: string): boolean
+	if not self.promptModal then
+		self:buildPromptModal()
+	end
+	self:colorPromptModal()
+	self.promptModal.message.Text = question
+	self.promptModal.overlay.Visible = true
+	-- drop focus so stray typing can't run a command behind the modal
+	self.input:blur()
+	local thread = coroutine.running()
+	self.promptResolve = function(v: boolean)
+		self.promptResolve = nil
+		self.promptModal.overlay.Visible = false
+		task.defer(function()
+			self.input:focus()
+		end)
+		task.spawn(thread, v == true)
+	end
 	return coroutine.yield()
 end
 
@@ -28802,6 +29357,44 @@ function Terminal:indicator(opts: { [string]: any }?): any
 	end
 	local line = self.output:appendLive((opts and opts.group) or "Output")
 	return Indicators.new(line, opts)
+end
+
+-- Print a pre-built RichText block (a Render.* result). Multi-line, non-wrapped.
+function Terminal:printRich(richText: string, group: string?)
+	if self.compact or not self.output then
+		return
+	end
+	self.output:appendRich(richText, group or "Output")
+end
+
+-- The ctx.UI surface, bound to this terminal: each method builds a Render block and prints
+-- it. The pure builders (badge/color/sparkline) are returned too, so handlers can compose
+-- them into a Markup line.
+function Terminal:ui(): { [string]: any }
+	local t = self
+	local function printer(builder)
+		return function(...)
+			t:printRich(builder(...), "Output")
+		end
+	end
+	return {
+		Markup = function(rich: string, group: string?)
+			t:printRich(rich, group)
+		end,
+		Rule = printer(Render.rule),
+		Panel = printer(Render.panel),
+		Table = printer(Render.table),
+		Tree = printer(Render.tree),
+		Fields = printer(Render.fields),
+		List = printer(Render.list),
+		BarChart = printer(Render.barchart),
+		Columns = printer(Render.columns),
+		Chart = printer(Render.sparkline), -- prints a sparkline on its own line
+		-- pure helpers (return a string to drop into Markup / table cells)
+		Badge = Render.badge,
+		Color = Render.color,
+		Sparkline = Render.sparkline,
+	}
 end
 
 -- One sink for all output, branching on presentation.
@@ -28847,6 +29440,7 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 		self.output:applyTheme(palette)
 	end
 	self.input:applyTheme(palette)
+	self:colorPromptModal()
 end
 
 -- ---------------------------------------------------------------------------
@@ -29579,6 +30173,32 @@ function Output:append(text: string, group: string?)
 		TextYAlignment = Enum.TextYAlignment.Top,
 		TextWrapped = true,
 		RichText = false,
+		LayoutOrder = #self.lines + 1,
+		Parent = self.frame,
+	}) :: TextLabel
+
+	table.insert(self.lines, { label = label, group = grp })
+end
+
+-- Append a block of RichText (panels, tables, trees, ...). Not wrapped, so monospaced
+-- column/box alignment is preserved; long lines just clip at the edge.
+function Output:appendRich(richText: string, group: string?)
+	local grp = group or "Output"
+	local color = self.palette and self.palette[grp] or Color3.new(1, 1, 1)
+
+	local label = create("TextLabel", {
+		Name = "Rich",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Font = FONT,
+		TextSize = TEXT_SIZE,
+		TextColor3 = color,
+		Text = richText,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = false,
+		RichText = true,
 		LayoutOrder = #self.lines + 1,
 		Parent = self.frame,
 	}) :: TextLabel

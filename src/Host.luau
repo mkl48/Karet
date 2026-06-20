@@ -46,6 +46,7 @@ export type Options = {
 	auth: Auth?,
 	networking: any?,
 	indicator: ((opts: any) -> any)?, -- terminal indicator factory (client only)
+	ui: ({ [string]: any })?, -- rich-output toolkit (client only)
 	confirm: ((name: string, def: any) -> boolean)?, -- dangerous-command gate (client only)
 }
 
@@ -58,6 +59,7 @@ function Host.new(opts: Options)
 	local cache = opts.cache
 	local query = opts.query
 	local indicator = opts.indicator
+	local ui = opts.ui
 	local confirm = opts.confirm
 	local isServer = opts.isServer == true
 	local isClient = opts.isClient == true
@@ -152,6 +154,7 @@ function Host.new(opts: Options)
 			cache = cache,
 			query = query,
 			indicator = indicator,
+			ui = ui,
 		})
 
 		for _, pre in hooks.pre do

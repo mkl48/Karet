@@ -221,4 +221,22 @@ return function(t)
 		k.run("load")
 		Assert.truthy(ok, "indicator calls didn't error")
 	end)
+
+	t.test("ctx.UI is a no-op toolkit without a terminal", function()
+		local ok = false
+		local k = rig(function(r)
+			r:register({
+				Name = "report",
+				Network = "Shared",
+				On = { Shared = function(ctx)
+					ctx.UI.Rule("hi")
+					ctx.UI.Table({ headers = { "a" }, rows = { { "1" } } })
+					ctx.UI.Panel("body", { title = "t" })
+					ok = true
+				end },
+			})
+		end)
+		k.run("report")
+		Assert.truthy(ok, "ui calls didn't error")
+	end)
 end

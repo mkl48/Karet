@@ -24,7 +24,7 @@ local Query = require(script.Query)
 local Profile = require(script.Profile)
 local Complete = require(script.Complete)
 local ContextMod = require(script.Context)
-local Prompt = require(script.Prompt)
+local Render = require(script.Render)
 
 -- ---------------------------------------------------------------------------
 -- public types (exported so editors autocomplete config + params)
@@ -101,6 +101,10 @@ Karet.Terminal = Terminal
 
 -- Kaveat, the built-in Luau editor (scaffold). Enable with Start{ Kaveat = true }.
 Karet.Kaveat = Kaveat
+
+-- The rich-output toolkit (panels, tables, trees, charts, ...). Pure string builders, also
+-- handed to handlers as ctx.UI. Karet.Render.table{...} etc. work anywhere.
+Karet.Render = Render
 
 -- Global key/value cache + named-query service, also reachable from handlers as
 -- ctx.Cache / ctx.Query. One instance per realm.
@@ -280,13 +284,13 @@ local function startClient(options: StartConfig)
 		end
 	end
 
-	-- Dangerous-command confirmation. "window" pops an Iris modal (falls back to text if Iris
-	-- isn't around); "text" (default) asks y/N right on the terminal. Both yield until answered.
+	-- Dangerous-command confirmation. "window" pops a small themed modal; "text" (default)
+	-- asks y/N right on the terminal. Both yield the command's thread until answered.
 	local promptType = options.PromptType or "text"
 	local function confirm(name: string, _def: any): boolean
 		local question = `run dangerous command '{name}'?`
-		if promptType == "window" and Prompt.available() then
-			return Prompt.window(question, terminal.gui.Parent)
+		if promptType == "window" then
+			return terminal:promptWindow(question)
 		end
 		return terminal:promptText(question)
 	end
@@ -308,6 +312,7 @@ local function startClient(options: StartConfig)
 		indicator = function(indicatorOpts)
 			return terminal:indicator(indicatorOpts)
 		end,
+		ui = terminal:ui(),
 		confirm = confirm,
 	})
 	local evaluator = Shell.newEvaluator(host)
@@ -320,15 +325,22 @@ local function startClient(options: StartConfig)
 			end
 			return
 		end
-		host.session.rawInput = line
-		local ok, result = pcall(function()
-			return evaluator:run(parsed.ast)
+		-- run the command on its OWN thread, not the input's submit thread. commands that
+		-- yield (a dangerous-command prompt waiting for an answer, a progress bar's task.wait,
+		-- a Server round-trip) need a thread that can suspend and resume cleanly - the submit
+		-- thread can't, which is why the prompts never waited before. the input stays usable
+		-- the whole time.
+		task.spawn(function()
+			host.session.rawInput = line
+			local ok, result = pcall(function()
+				return evaluator:run(parsed.ast)
+			end)
+			if not ok then
+				terminal:error(tostring(result))
+			elseif type(result) == "table" and result.ok == false and result.error then
+				terminal:error(result.error)
+			end
 		end)
-		if not ok then
-			terminal:error(tostring(result))
-		elseif type(result) == "table" and result.ok == false and result.error then
-			terminal:error(result.error)
-		end
 	end)
 
 	-- kaveat editor, mounted beside the terminal if enabled

@@ -212,6 +212,46 @@ function Commands.build(services: Services): { any }
 		},
 
 		{
+			Name = "ui",
+			Description = "show off the rich terminal output (panels, tables, charts...)",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local UI = ctx.UI
+				UI.Rule("karet ui")
+				UI.Panel({ "a bordered panel.", "monospaced, themed,", "multi-line." }, { title = "panel" })
+				UI.Table({
+					headers = { "name", "role", "ping" },
+					rows = {
+						{ "alice", "admin", "24ms" },
+						{ "bob", "user", "57ms" },
+						{ "carol", "mod", "31ms" },
+					},
+				})
+				UI.Fields({
+					{ "os", "Roblox" },
+					{ "shell", "karet" },
+					{ "theme", "tokyonight" },
+					{ "uptime", "12m" },
+				})
+				UI.Tree({
+					label = "game",
+					children = {
+						{ label = "Workspace", children = { "Baseplate", "Spawn" } },
+						{ label = "Players", children = { "alice", "bob" } },
+					},
+				})
+				UI.List({
+					{ text = "connected", status = "ok" },
+					{ text = "loaded assets", status = "ok" },
+					{ text = "missing texture", status = "warn" },
+					{ text = "failed to join", status = "fail" },
+				})
+				UI.BarChart({ { "cpu", 82 }, { "mem", 61 }, { "net", 37 } }, { max = 100 })
+				UI.Markup(`fps {UI.Sparkline({ 30, 42, 51, 48, 60, 58, 59, 60 })}  {UI.Badge("60", { color = "Success" })}`)
+			end },
+		},
+
+		{
 			Name = "danger",
 			Description = "example dangerous command (asks to confirm first)",
 			Network = "Client",

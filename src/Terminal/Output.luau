@@ -85,6 +85,32 @@ function Output:append(text: string, group: string?)
 	table.insert(self.lines, { label = label, group = grp })
 end
 
+-- Append a block of RichText (panels, tables, trees, ...). Not wrapped, so monospaced
+-- column/box alignment is preserved; long lines just clip at the edge.
+function Output:appendRich(richText: string, group: string?)
+	local grp = group or "Output"
+	local color = self.palette and self.palette[grp] or Color3.new(1, 1, 1)
+
+	local label = create("TextLabel", {
+		Name = "Rich",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Font = FONT,
+		TextSize = TEXT_SIZE,
+		TextColor3 = color,
+		Text = richText,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = false,
+		RichText = true,
+		LayoutOrder = #self.lines + 1,
+		Parent = self.frame,
+	}) :: TextLabel
+
+	table.insert(self.lines, { label = label, group = grp })
+end
+
 -- A line you can keep rewriting in place (RichText), used by indicators/progress bars.
 -- Returns a handle: handle:set(richText) updates it, handle:remove() deletes it.
 function Output:appendLive(group: string?)

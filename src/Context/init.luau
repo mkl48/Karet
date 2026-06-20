@@ -20,6 +20,11 @@ local NOOP_INDICATOR = setmetatable({}, { __index = function()
 	end
 end })
 
+-- Same idea for the rich-output toolkit (ctx.UI): off the terminal every method is a no-op.
+local NOOP_UI = setmetatable({}, { __index = function()
+	return function() end
+end })
+
 export type Options = {
 	player: any?, -- Player or nil (Studio/no-player)
 	command: string,
@@ -34,6 +39,7 @@ export type Options = {
 	cache: any?, -- the global Karet.Cache
 	query: any?, -- the global Karet.Query
 	indicator: ((opts: any) -> any)?, -- builds a terminal indicator (client/terminal only)
+	ui: ({ [string]: any })?, -- the rich-output toolkit (panels/tables/...), terminal only
 }
 
 export type Control = {
@@ -56,6 +62,7 @@ export type Context = {
 	Rank: number?,
 	Cache: any, -- Karet.Cache
 	Query: any, -- Karet.Query
+	UI: { [string]: any }, -- rich output toolkit (no-op off the terminal)
 	Print: (message: any) -> (),
 	Warn: (message: any) -> (),
 	Err: (message: any) -> (),
@@ -94,6 +101,7 @@ function Context.new(opts: Options): (any, Control)
 		Rank = opts.rank,
 		Cache = opts.cache, -- global key/value cache (ctx.Cache:Get/Set/...)
 		Query = opts.query, -- named-query service (ctx.Query:Run("players"))
+		UI = opts.ui or NOOP_UI, -- rich output: ctx.UI.Table{...}, ctx.UI.Panel(...), ...
 	}
 
 	function ctx.Print(message: any)

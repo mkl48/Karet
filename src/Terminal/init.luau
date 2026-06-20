@@ -24,6 +24,7 @@ local create = require(script.create)
 local Output = require(script.Output)
 local Input = require(script.Input)
 local Indicators = require(script.Parent.Indicators)
+local Render = require(script.Parent.Render)
 
 local Terminal = {}
 Terminal.__index = Terminal
@@ -44,7 +45,10 @@ export type Terminal = {
 	info: (self: Terminal, text: string) -> (),
 	success: (self: Terminal, text: string) -> (),
 	indicator: (self: Terminal, opts: { [string]: any }?) -> any,
+	printRich: (self: Terminal, richText: string, group: string?) -> (),
+	ui: (self: Terminal) -> { [string]: any },
 	promptText: (self: Terminal, question: string) -> boolean,
+	promptWindow: (self: Terminal, question: string) -> boolean,
 	clear: (self: Terminal) -> (),
 	onSubmit: (self: Terminal, fn: (string) -> ()) -> (),
 	destroy: (self: Terminal) -> (),
@@ -355,8 +359,146 @@ function Terminal:promptText(question: string): boolean
 		local a = string.lower((string.gsub(line, "%s", "")))
 		task.spawn(thread, a == "y" or a == "yes")
 	end
-	-- the box just lost focus on submit; grab it back so the answer can be typed
-	self.input:focus()
+	-- make sure the box has focus so the answer can be typed
+	task.defer(function()
+		self.input:focus()
+	end)
+	return coroutine.yield()
+end
+
+-- ---------------------------------------------------------------------------
+-- modal confirm (the "window" prompt) - a small themed dialog, built once and reused
+-- ---------------------------------------------------------------------------
+
+function Terminal:buildPromptModal()
+	local title = create("TextLabel", {
+		Name = "Title",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -24, 0, 22),
+		Position = UDim2.new(0, 14, 0, 12),
+		Font = Enum.Font.Code,
+		TextSize = 15,
+		Text = "⚠  confirm",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+	}) :: TextLabel
+	local message = create("TextLabel", {
+		Name = "Message",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -28, 0, 44),
+		Position = UDim2.new(0, 14, 0, 38),
+		Font = Enum.Font.Code,
+		TextSize = 14,
+		Text = "",
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+	}) :: TextLabel
+
+	local function button(name: string, text: string, x: number)
+		return create("TextButton", {
+			Name = name,
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(1, 1),
+			Size = UDim2.new(0, 92, 0, 28),
+			Position = UDim2.new(1, x, 1, -12),
+			Font = Enum.Font.Code,
+			TextSize = 14,
+			Text = text,
+			Children = { create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+		}) :: TextButton
+	end
+	local noBtn = button("No", "cancel", -14)
+	local yesBtn = button("Yes", "run", -114)
+
+	local cardStroke = create("UIStroke", { Thickness = 1 })
+	local card = create("Frame", {
+		Name = "Card",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(360, 150),
+		BorderSizePixel = 0,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 10) }),
+			cardStroke,
+			title,
+			message,
+			yesBtn,
+			noBtn,
+		},
+	})
+	local overlay = create("Frame", {
+		Name = "PromptOverlay",
+		Visible = false,
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0.45,
+		BorderSizePixel = 0,
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 100,
+		Children = { card },
+		Parent = self.window,
+	})
+
+	self.promptModal = {
+		overlay = overlay,
+		card = card,
+		cardStroke = cardStroke,
+		title = title,
+		message = message,
+		yes = yesBtn,
+		no = noBtn,
+	}
+
+	yesBtn.MouseButton1Click:Connect(function()
+		if self.promptResolve then
+			self.promptResolve(true)
+		end
+	end)
+	noBtn.MouseButton1Click:Connect(function()
+		if self.promptResolve then
+			self.promptResolve(false)
+		end
+	end)
+
+	self:colorPromptModal()
+end
+
+function Terminal:colorPromptModal()
+	local m = self.promptModal
+	if not m or not self.palette then
+		return
+	end
+	local p = self.palette
+	m.card.BackgroundColor3 = p.Surface
+	m.cardStroke.Color = p.Border
+	m.title.TextColor3 = p.Warn
+	m.message.TextColor3 = p.Foreground
+	m.yes.BackgroundColor3 = p.Error
+	m.yes.TextColor3 = p.Background
+	m.no.BackgroundColor3 = p.Background
+	m.no.TextColor3 = p.Foreground
+end
+
+-- Show the modal confirm and yield until a button is clicked. Returns true on "run".
+function Terminal:promptWindow(question: string): boolean
+	if not self.promptModal then
+		self:buildPromptModal()
+	end
+	self:colorPromptModal()
+	self.promptModal.message.Text = question
+	self.promptModal.overlay.Visible = true
+	-- drop focus so stray typing can't run a command behind the modal
+	self.input:blur()
+	local thread = coroutine.running()
+	self.promptResolve = function(v: boolean)
+		self.promptResolve = nil
+		self.promptModal.overlay.Visible = false
+		task.defer(function()
+			self.input:focus()
+		end)
+		task.spawn(thread, v == true)
+	end
 	return coroutine.yield()
 end
 
@@ -368,6 +510,44 @@ function Terminal:indicator(opts: { [string]: any }?): any
 	end
 	local line = self.output:appendLive((opts and opts.group) or "Output")
 	return Indicators.new(line, opts)
+end
+
+-- Print a pre-built RichText block (a Render.* result). Multi-line, non-wrapped.
+function Terminal:printRich(richText: string, group: string?)
+	if self.compact or not self.output then
+		return
+	end
+	self.output:appendRich(richText, group or "Output")
+end
+
+-- The ctx.UI surface, bound to this terminal: each method builds a Render block and prints
+-- it. The pure builders (badge/color/sparkline) are returned too, so handlers can compose
+-- them into a Markup line.
+function Terminal:ui(): { [string]: any }
+	local t = self
+	local function printer(builder)
+		return function(...)
+			t:printRich(builder(...), "Output")
+		end
+	end
+	return {
+		Markup = function(rich: string, group: string?)
+			t:printRich(rich, group)
+		end,
+		Rule = printer(Render.rule),
+		Panel = printer(Render.panel),
+		Table = printer(Render.table),
+		Tree = printer(Render.tree),
+		Fields = printer(Render.fields),
+		List = printer(Render.list),
+		BarChart = printer(Render.barchart),
+		Columns = printer(Render.columns),
+		Chart = printer(Render.sparkline), -- prints a sparkline on its own line
+		-- pure helpers (return a string to drop into Markup / table cells)
+		Badge = Render.badge,
+		Color = Render.color,
+		Sparkline = Render.sparkline,
+	}
 end
 
 -- One sink for all output, branching on presentation.
@@ -413,6 +593,7 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 		self.output:applyTheme(palette)
 	end
 	self.input:applyTheme(palette)
+	self:colorPromptModal()
 end
 
 -- ---------------------------------------------------------------------------
