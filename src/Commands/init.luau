@@ -157,6 +157,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "kav" },
 			Description = "open the script editor",
 			Network = "Client",
+			Args = { { Name = "file", Types = { "String" }, Required = false } },
 			Attributes = {
 				{ Name = "server", Short = "s", Description = "edit in server context" },
 				{ Name = "client", Short = "c", Description = "edit in client context" },
@@ -178,7 +179,12 @@ function Commands.build(services: Services): { any }
 				if a.client then
 					editor:setContext("Client")
 				end
-				editor:open()
+				local file = ctx.Args.file
+				if file then
+					editor:openFile(file)
+				else
+					editor:open()
+				end
 			end },
 		},
 	}

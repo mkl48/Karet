@@ -342,10 +342,14 @@ local function startClient(options: StartConfig)
 		end
 	end)
 
-	-- Kaveat editor (scaffold), mounted beside the terminal if enabled.
+	-- kaveat editor, mounted beside the terminal if enabled
 	if options.Kaveat then
 		local editor = Kaveat.new({ Parent = terminal.gui.Parent })
 		editor:mount(terminal.gui.Parent)
+		-- save/open named scripts from the active profile
+		editor:setStore(function()
+			return Karet.Profile.Kavs
+		end)
 		Karet.Editor = editor
 	end
 
@@ -645,6 +649,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "kav" },
 			Description = "open the script editor",
 			Network = "Client",
+			Args = { { Name = "file", Types = { "String" }, Required = false } },
 			Attributes = {
 				{ Name = "server", Short = "s", Description = "edit in server context" },
 				{ Name = "client", Short = "c", Description = "edit in client context" },
@@ -666,7 +671,12 @@ function Commands.build(services: Services): { any }
 				if a.client then
 					editor:setContext("Client")
 				end
-				editor:open()
+				local file = ctx.Args.file
+				if file then
+					editor:openFile(file)
+				else
+					editor:open()
+				end
 			end },
 		},
 	}
@@ -15229,6 +15239,9 @@ function Kaveat:render()
 	if Iris.Button({ "Run" }).clicked() then
 		self:run()
 	end
+	if Iris.Button({ "Save" }).clicked() then
+		self:save()
+	end
 	if Iris.Button({ "Clear" }).clicked() then
 		self.buffer.source = ""
 	end
@@ -15271,6 +15284,39 @@ end
 
 function Kaveat:getSource(): string
 	return self.buffer.source
+end
+
+-- the file store, a func returning the kavs table { [name] = source }
+function Kaveat:setStore(get: () -> { [string]: string })
+	self.store = get
+end
+
+-- open (or create) a named kav from the store and show it
+function Kaveat:openFile(name: string)
+	self.buffer.name = name
+	local kavs = self.store and self.store()
+	self.buffer.source = (kavs and kavs[name]) or ""
+	self:open()
+end
+
+function Kaveat:save()
+	local kavs = self.store and self.store()
+	if not kavs then
+		self.status = "no profile to save to"
+		return
+	end
+	kavs[self.buffer.name] = self.buffer.source
+	self.status = "saved " .. self.buffer.name
+end
+
+function Kaveat:listFiles(): { string }
+	local kavs = (self.store and self.store()) or {}
+	local names = {}
+	for n in kavs do
+		table.insert(names, n)
+	end
+	table.sort(names)
+	return names
 end
 
 -- Host wires the real executor here: runner(source, context) -> result.

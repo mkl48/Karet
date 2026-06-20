@@ -310,10 +310,14 @@ local function startClient(options: StartConfig)
 		end
 	end)
 
-	-- Kaveat editor (scaffold), mounted beside the terminal if enabled.
+	-- kaveat editor, mounted beside the terminal if enabled
 	if options.Kaveat then
 		local editor = Kaveat.new({ Parent = terminal.gui.Parent })
 		editor:mount(terminal.gui.Parent)
+		-- save/open named scripts from the active profile
+		editor:setStore(function()
+			return Karet.Profile.Kavs
+		end)
 		Karet.Editor = editor
 	end
 
