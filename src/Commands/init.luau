@@ -192,6 +192,34 @@ function Commands.build(services: Services): { any }
 				end
 			end },
 		},
+
+		{
+			Name = "demo",
+			Description = "show off the terminal indicators (progress + spinner)",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local bar = ctx.Indicator({ type = "progress", label = "downloading", total = 100, eta = true })
+				for i = 0, 100, 4 do
+					bar:Set(i)
+					task.wait(0.03)
+				end
+				bar:Succeed("downloaded")
+
+				local spin = ctx.Indicator({ type = "spinner", label = "compiling" })
+				task.wait(1.2)
+				spin:Succeed("compiled")
+			end },
+		},
+
+		{
+			Name = "danger",
+			Description = "example dangerous command (asks to confirm first)",
+			Network = "Client",
+			Dangerous = true,
+			On = { Client = function(ctx)
+				ctx.Success("confirmed, boom")
+			end },
+		},
 	}
 end
 

@@ -45,6 +45,8 @@ export type Options = {
 	hooks: Hooks?,
 	auth: Auth?,
 	networking: any?,
+	indicator: ((opts: any) -> any)?, -- terminal indicator factory (client only)
+	confirm: ((name: string, def: any) -> boolean)?, -- dangerous-command gate (client only)
 }
 
 function Host.new(opts: Options)
@@ -55,6 +57,8 @@ function Host.new(opts: Options)
 	local networking = opts.networking
 	local cache = opts.cache
 	local query = opts.query
+	local indicator = opts.indicator
+	local confirm = opts.confirm
 	local isServer = opts.isServer == true
 	local isClient = opts.isClient == true
 
@@ -147,6 +151,7 @@ function Host.new(opts: Options)
 			sink = sink,
 			cache = cache,
 			query = query,
+			indicator = indicator,
 		})
 
 		for _, pre in hooks.pre do
@@ -193,6 +198,15 @@ function Host.new(opts: Options)
 		local name, def = invocation.name, invocation.definition
 		local network = def.Network or "Shared"
 		local On = def.On or {}
+
+		-- Dangerous commands ask for confirmation before doing anything (client only - the
+		-- confirm callback yields on a terminal prompt / Iris modal). Bailing here also stops
+		-- a Server/Context command from ever leaving the client.
+		if def.Dangerous and confirm then
+			if confirm(name, def) ~= true then
+				return { ok = false, error = `'{name}' cancelled` }
+			end
+		end
 
 		if isServer then
 			local authed, why = checkAuth(name, def, session.player)

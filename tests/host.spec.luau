@@ -158,4 +158,67 @@ return function(t)
 		k.run("ban -p")
 		Assert.truthy(seen, "flag set true")
 	end)
+
+	-- Dangerous commands run through a confirm gate (Start{ PromptType } wires the real one).
+	local function rigConfirm(confirmFn)
+		local registry = Registry.new()
+		local types = Types.new()
+		local ran = false
+		registry:register({
+			Name = "nuke",
+			Network = "Shared",
+			Dangerous = true,
+			On = { Shared = function() ran = true end },
+		})
+		local host = Host.new({
+			registry = registry,
+			types = types,
+			isClient = true,
+			sink = function() end,
+			confirm = confirmFn,
+		})
+		local ev = Evaluator.new(host)
+		local function run(line)
+			return ev:run(Parser.parse(line).ast)
+		end
+		return { run = run, ranRef = function() return ran end }
+	end
+
+	t.test("dangerous command is cancelled when confirm says no", function()
+		local asked
+		local k = rigConfirm(function(name)
+			asked = name
+			return false
+		end)
+		local result = k.run("nuke")
+		Assert.eq(asked, "nuke", "confirm got the command name")
+		Assert.falsy(result.ok, "cancelled")
+		Assert.falsy(k.ranRef(), "handler never ran")
+	end)
+
+	t.test("dangerous command runs when confirm says yes", function()
+		local k = rigConfirm(function()
+			return true
+		end)
+		local result = k.run("nuke")
+		Assert.truthy(result.ok, "ran")
+		Assert.truthy(k.ranRef(), "handler ran")
+	end)
+
+	t.test("ctx.Indicator is a chainable no-op without a terminal", function()
+		local ok = false
+		local k = rig(function(r)
+			r:register({
+				Name = "load",
+				Network = "Shared",
+				On = { Shared = function(ctx)
+					-- every method chains and returns the handle; nothing should error
+					ctx.Indicator({ type = "progress" }):Set(0.5):Step():Succeed("done")
+					ok = true
+				end },
+			})
+		end)
+		k.run("load")
+		Assert.truthy(ok, "indicator calls didn't error")
+	end)
 end

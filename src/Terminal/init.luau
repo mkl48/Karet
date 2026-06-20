@@ -23,6 +23,7 @@ local Capture = require(script.Parent.Capture)
 local create = require(script.create)
 local Output = require(script.Output)
 local Input = require(script.Input)
+local Indicators = require(script.Parent.Indicators)
 
 local Terminal = {}
 Terminal.__index = Terminal
@@ -42,6 +43,8 @@ export type Terminal = {
 	warn: (self: Terminal, text: string) -> (),
 	info: (self: Terminal, text: string) -> (),
 	success: (self: Terminal, text: string) -> (),
+	indicator: (self: Terminal, opts: { [string]: any }?) -> any,
+	promptText: (self: Terminal, question: string) -> boolean,
 	clear: (self: Terminal) -> (),
 	onSubmit: (self: Terminal, fn: (string) -> ()) -> (),
 	destroy: (self: Terminal) -> (),
@@ -92,7 +95,50 @@ function Terminal.new(opts: { [string]: any }?)
 		self:applyTheme(palette)
 	end)
 
+	-- ctrl +/- zoom (and ctrl+0 reset), client only.
+	if RunService:IsClient() then
+		self:setupZoom()
+	end
+
 	return self
+end
+
+-- ---------------------------------------------------------------------------
+-- zoom (ctrl +/-), scales the whole window via UIScale
+-- ---------------------------------------------------------------------------
+
+local ZOOM_MIN, ZOOM_MAX, ZOOM_STEP = 0.6, 2.0, 0.1
+
+function Terminal:setScale(scale: number)
+	if not self.scaleObj then
+		return
+	end
+	self.scaleObj.Scale = math.clamp(scale, ZOOM_MIN, ZOOM_MAX)
+end
+
+function Terminal:zoomBy(delta: number)
+	if self.scaleObj then
+		self:setScale(self.scaleObj.Scale + delta)
+	end
+end
+
+function Terminal:setupZoom()
+	self.zoomConn = UserInputService.InputBegan:Connect(function(input)
+		if not self.isOpen then
+			return
+		end
+		if not (UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)) then
+			return
+		end
+		local key = input.KeyCode
+		if key == Enum.KeyCode.Equals or key == Enum.KeyCode.KeypadPlus then
+			self:zoomBy(ZOOM_STEP)
+		elseif key == Enum.KeyCode.Minus or key == Enum.KeyCode.KeypadMinus then
+			self:zoomBy(-ZOOM_STEP)
+		elseif key == Enum.KeyCode.Zero or key == Enum.KeyCode.KeypadZero then
+			self:setScale(1)
+		end
+	end)
 end
 
 local function makeGui(window: Instance): Instance
@@ -152,6 +198,7 @@ function Terminal:buildWindow(options)
 	})
 
 	local stroke = create("UIStroke", { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+	local scale = create("UIScale", { Scale = 1 })
 
 	local window = create("Frame", {
 		Name = "Window",
@@ -162,6 +209,7 @@ function Terminal:buildWindow(options)
 		Visible = false,
 		Children = {
 			create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			scale,
 			stroke,
 			titleBar,
 			separator,
@@ -169,6 +217,7 @@ function Terminal:buildWindow(options)
 			inputHolder,
 		},
 	})
+	self.scaleObj = scale
 
 	self.gui = makeGui(window)
 	self.window = window
@@ -238,6 +287,7 @@ function Terminal:buildCompact(options)
 	})
 
 	local stroke = create("UIStroke", { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+	local scale = create("UIScale", { Scale = 1 })
 
 	local window = create("Frame", {
 		Name = "Window",
@@ -246,8 +296,9 @@ function Terminal:buildCompact(options)
 		Size = options.Size or self.placement.Size,
 		BorderSizePixel = 0,
 		Visible = false,
-		Children = { create("UICorner", { CornerRadius = UDim.new(0, 8) }), stroke, resultLabel, inputHolder },
+		Children = { create("UICorner", { CornerRadius = UDim.new(0, 8) }), scale, stroke, resultLabel, inputHolder },
 	})
+	self.scaleObj = scale
 
 	self.gui = makeGui(window)
 	self.window = window
@@ -281,10 +332,42 @@ function Terminal:wireSubmit()
 		if not self.compact then
 			self.output:append(`› {line}`, "Comment")
 		end
+		-- a pending prompt (eg the dangerous-command y/N gate) swallows the next line as its
+		-- answer instead of running it as a command
+		if self.pendingPrompt then
+			local resolve = self.pendingPrompt
+			self.pendingPrompt = nil
+			resolve(line)
+			return
+		end
 		if self.submitHandler then
 			self.submitHandler(line)
 		end
 	end)
+end
+
+-- Ask a yes/no question on the terminal and yield until the next line is submitted. Returns
+-- true for y/yes (anything else is no). Used by the dangerous-command gate in "text" mode.
+function Terminal:promptText(question: string): boolean
+	self:emit("Warn", `{question}  [y/N]`)
+	local thread = coroutine.running()
+	self.pendingPrompt = function(line: string)
+		local a = string.lower((string.gsub(line, "%s", "")))
+		task.spawn(thread, a == "y" or a == "yes")
+	end
+	-- the box just lost focus on submit; grab it back so the answer can be typed
+	self.input:focus()
+	return coroutine.yield()
+end
+
+-- Spin up an indicator (progress bar / spinner / ...) on its own live output line. Compact
+-- bars have no scrolling log, so they get a no-op with the same shape.
+function Terminal:indicator(opts: { [string]: any }?): any
+	if self.compact or not self.output then
+		return Indicators.noop()
+	end
+	local line = self.output:appendLive((opts and opts.group) or "Output")
+	return Indicators.new(line, opts)
 end
 
 -- One sink for all output, branching on presentation.
@@ -492,6 +575,9 @@ end
 function Terminal:destroy()
 	if self.unsubscribeTheme then
 		self.unsubscribeTheme()
+	end
+	if self.zoomConn then
+		self.zoomConn:Disconnect()
 	end
 	if self.switch then
 		for _, name in self.actions do

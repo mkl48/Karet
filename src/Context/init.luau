@@ -11,6 +11,15 @@ local Context = {}
 -- A unique tag so the Host can tell an intentional Abort from a real Lua error.
 local ABORT = "__KaretAbort"
 
+-- A same-shaped no-op indicator, returned when there's no terminal to draw into (server
+-- handlers, headless). Every method is chainable and does nothing. Defined here so this
+-- module stays free of any Roblox-engine require (the headless tests load it).
+local NOOP_INDICATOR = setmetatable({}, { __index = function()
+	return function(self)
+		return self
+	end
+end })
+
 export type Options = {
 	player: any?, -- Player or nil (Studio/no-player)
 	command: string,
@@ -24,6 +33,7 @@ export type Options = {
 	sink: (group: string, message: string) -> (), -- group = a Karet.Theme group name
 	cache: any?, -- the global Karet.Cache
 	query: any?, -- the global Karet.Query
+	indicator: ((opts: any) -> any)?, -- builds a terminal indicator (client/terminal only)
 }
 
 export type Control = {
@@ -54,6 +64,7 @@ export type Context = {
 	Return: (...any) -> (),
 	Commit: (payload: any) -> (),
 	Abort: (message: string?) -> (),
+	Indicator: (opts: any) -> any, -- a progress bar / spinner; no-op off the terminal
 }
 
 function Context.isAbort(err: any): boolean
@@ -119,6 +130,15 @@ function Context.new(opts: Options): (any, Control)
 	-- Context (bridge) command only: hand a payload from On.Client to On.Server.
 	function ctx.Commit(payload: any)
 		committedPayload = payload
+	end
+
+	-- Spin up a terminal indicator (progress bar / spinner / dots). Off the terminal (server,
+	-- compact, headless) this hands back a no-op with the same shape so handlers don't branch.
+	function ctx.Indicator(indicatorOpts: any): any
+		if opts.indicator then
+			return opts.indicator(indicatorOpts or {})
+		end
+		return NOOP_INDICATOR
 	end
 
 	-- Cancel mid-handler with a message.

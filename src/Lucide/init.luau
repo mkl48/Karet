@@ -9,7 +9,8 @@ export type Asset = {
 }
 
 local Icons = require(script.Icons)
-local VersionInfo = require(script.VersionInfo)
+-- no version-info module vendored, so the version fields are left off
+--local VersionInfo = require(script.VersionInfo)
 
 local Type = typeof or type
 local function CheckArgTypes(funcName: string, inputArgs: {any}, typeEntries: {[number]: {string}})
@@ -48,8 +49,8 @@ end
 
 -- See /version-info.luau
 local Lucide = {
-    PackageVersion = VersionInfo.PackageVersion,
-    LucideVersion = VersionInfo.LucideVersion,
+    --PackageVersion = VersionInfo.PackageVersion,
+    --LucideVersion = VersionInfo.LucideVersion,
 }
 
 -- Add all icon names to an array

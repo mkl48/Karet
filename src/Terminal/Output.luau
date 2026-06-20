@@ -85,6 +85,46 @@ function Output:append(text: string, group: string?)
 	table.insert(self.lines, { label = label, group = grp })
 end
 
+-- A line you can keep rewriting in place (RichText), used by indicators/progress bars.
+-- Returns a handle: handle:set(richText) updates it, handle:remove() deletes it.
+function Output:appendLive(group: string?)
+	local grp = group or "Output"
+	local color = self.palette and self.palette[grp] or Color3.new(1, 1, 1)
+
+	local label = create("TextLabel", {
+		Name = "LiveLine",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Font = FONT,
+		TextSize = TEXT_SIZE,
+		TextColor3 = color,
+		Text = "",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true,
+		RichText = true,
+		LayoutOrder = #self.lines + 1,
+		Parent = self.frame,
+	}) :: TextLabel
+
+	local entry = { label = label, group = grp }
+	table.insert(self.lines, entry)
+
+	local handle = {}
+	function handle.set(richText: string)
+		label.Text = richText
+	end
+	function handle.remove()
+		local i = table.find(self.lines, entry)
+		if i then
+			table.remove(self.lines, i)
+		end
+		label:Destroy()
+	end
+	return handle
+end
+
 function Output:clear()
 	for _, line in self.lines do
 		line.label:Destroy()

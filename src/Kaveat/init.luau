@@ -75,6 +75,7 @@ function Kaveat.new(opts: { [string]: any }?)
 	self.cmdSel = 0
 	self.cmdSugLabels = {}
 	self.acSuggestions = {}
+	self.acSel = 0
 	self.acLabels = {}
 	self.lucide = deps.Lucide()
 	self.iconCache = {}
@@ -374,6 +375,7 @@ function Kaveat:build(options)
 		ZIndex = 6,
 	})
 
+	local scale = create("UIScale", { Scale = 1 })
 	local window = create("Frame", {
 		Name = "Window",
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -383,6 +385,7 @@ function Kaveat:build(options)
 		Visible = false,
 		Children = {
 			create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			scale,
 			stroke,
 			topbar,
 			tree,
@@ -393,6 +396,7 @@ function Kaveat:build(options)
 			grip,
 		},
 	})
+	self.scaleObj = scale
 	local gui = create("ScreenGui", {
 		Name = "KaretKaveat",
 		ResetOnSpawn = false,
@@ -507,6 +511,18 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 		return
 	end
 
+	-- ctrl +/- zoom (ctrl+0 resets), scales the whole editor window
+	if ctrl and (key == Enum.KeyCode.Equals or key == Enum.KeyCode.KeypadPlus) then
+		self:zoomBy(0.1)
+		return
+	elseif ctrl and (key == Enum.KeyCode.Minus or key == Enum.KeyCode.KeypadMinus) then
+		self:zoomBy(-0.1)
+		return
+	elseif ctrl and (key == Enum.KeyCode.Zero or key == Enum.KeyCode.KeypadZero) then
+		self:setScale(1)
+		return
+	end
+
 	-- cmdline open: tab accepts, up/down move the suggestion (these are processed by the
 	-- cmd textbox so handle them before the processed guard)
 	if self.cmdline.Visible then
@@ -523,17 +539,30 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 	end
 
 	if self.mode == "WRITE" then
+		local hasAc = #self.acSuggestions > 0
 		if key == Enum.KeyCode.Tab then
 			-- roblox textboxes dont insert a tab, so we handle it: accept or indent
-			if #self.acSuggestions > 0 then
-				self:acceptAc(self.acSuggestions[1])
+			if hasAc then
+				self:acceptAc(self.acSuggestions[self.acSel])
 			else
 				self:insertText("    ")
 			end
 			return
 		end
+		-- up/down cycle the autocomplete when its open, otherwise let the caret move
+		if hasAc and key == Enum.KeyCode.Up then
+			self:moveAcSel(-1)
+			return
+		elseif hasAc and key == Enum.KeyCode.Down then
+			self:moveAcSel(1)
+			return
+		end
 		if key == Enum.KeyCode.Escape then
-			self.box:ReleaseFocus()
+			if hasAc then
+				self:hideAc()
+			else
+				self.box:ReleaseFocus()
+			end
 		end
 		return
 	end
@@ -648,10 +677,24 @@ function Kaveat:editorComplete()
 		self:hideAc()
 		return
 	end
+	-- remember where the caret was when we computed these, so accepting still targets the
+	-- right word even if up/down nudged the native textbox caret while cycling suggestions
+	self.acCursor = self.box.CursorPosition
 	self.acSuggestions = LuauComplete.complete(self.box.Text, self.box.CursorPosition)
+	self.acSel = #self.acSuggestions > 0 and 1 or 0
 	local before = string.sub(self.box.Text, 1, math.max(0, self.box.CursorPosition - 1))
 	local line = select(2, string.gsub(before, "\n", "\n"))
 	self.acFrame.Position = UDim2.new(0, 50, 0, (line + 1) * (SIZE + 2))
+	self:renderAc()
+end
+
+-- cycle the autocomplete selection (wraps), capped at the 8 shown rows
+function Kaveat:moveAcSel(d: number)
+	local n = math.min(#self.acSuggestions, 8)
+	if n == 0 then
+		return
+	end
+	self.acSel = ((self.acSel - 1 + d) % n) + 1
 	self:renderAc()
 end
 
@@ -676,7 +719,7 @@ function Kaveat:renderAc()
 		local row = create("Frame", {
 			Name = "Ac",
 			BackgroundColor3 = sel,
-			BackgroundTransparency = i == 1 and 0 or 1, -- top one is highlighted, tab takes it
+			BackgroundTransparency = i == self.acSel and 0 or 1, -- highlighted row, tab takes it
 			Size = UDim2.new(1, 0, 0, 18),
 			LayoutOrder = i,
 			ZIndex = 10,
@@ -751,13 +794,17 @@ end
 
 function Kaveat:hideAc()
 	self.acSuggestions = {}
+	self.acSel = 0
 	self:renderAc()
 end
 
 -- replace the word being typed with the suggestion
 function Kaveat:acceptAc(s: any)
+	if not s then
+		return
+	end
 	local text = self.box.Text
-	local cur = self.box.CursorPosition
+	local cur = self.acCursor or self.box.CursorPosition
 	if cur < 1 then
 		cur = #text + 1
 	end
@@ -1103,6 +1150,20 @@ function Kaveat:layout()
 	self.outDrag.Position = UDim2.new(0, 0, 1, -self.outH - 3)
 	self.output.Size = UDim2.new(1, 0, 0, self.outH)
 	self.output.Position = UDim2.new(0, 0, 1, -self.outH)
+end
+
+-- zoom ---------------------------------------------------------------------
+
+function Kaveat:setScale(scale: number)
+	if self.scaleObj then
+		self.scaleObj.Scale = math.clamp(scale, 0.6, 2.0)
+	end
+end
+
+function Kaveat:zoomBy(delta: number)
+	if self.scaleObj then
+		self:setScale(self.scaleObj.Scale + delta)
+	end
 end
 
 -- lifecycle ----------------------------------------------------------------

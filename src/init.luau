@@ -24,6 +24,7 @@ local Query = require(script.Query)
 local Profile = require(script.Profile)
 local Complete = require(script.Complete)
 local ContextMod = require(script.Context)
+local Prompt = require(script.Prompt)
 
 -- ---------------------------------------------------------------------------
 -- public types (exported so editors autocomplete config + params)
@@ -53,6 +54,7 @@ export type StartConfig = {
 	Size: UDim2?, -- override the window size
 	Position: UDim2?, -- override the window position
 	Kaveat: boolean?, -- enable the Kaveat editor
+	PromptType: ("text" | "window")?, -- how Dangerous commands confirm: terminal y/N or an Iris modal
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	DefaultRole: string?, -- server: default role for players
 	RateLimit: RateLimit?, -- server: rate limiting (reserved)
@@ -278,6 +280,17 @@ local function startClient(options: StartConfig)
 		end
 	end
 
+	-- Dangerous-command confirmation. "window" pops an Iris modal (falls back to text if Iris
+	-- isn't around); "text" (default) asks y/N right on the terminal. Both yield until answered.
+	local promptType = options.PromptType or "text"
+	local function confirm(name: string, _def: any): boolean
+		local question = `run dangerous command '{name}'?`
+		if promptType == "window" and Prompt.available() then
+			return Prompt.window(question, terminal.gui.Parent)
+		end
+		return terminal:promptText(question)
+	end
+
 	local networking = Networking.new()
 	local host = Host.new({
 		registry = registry,
@@ -292,6 +305,10 @@ local function startClient(options: StartConfig)
 		networking = networking,
 		cache = cache,
 		query = query,
+		indicator = function(indicatorOpts)
+			return terminal:indicator(indicatorOpts)
+		end,
+		confirm = confirm,
 	})
 	local evaluator = Shell.newEvaluator(host)
 

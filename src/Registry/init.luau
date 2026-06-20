@@ -24,6 +24,7 @@ export type Definition = {
 	Description: string?,
 	Network: NetworkKind?,
 	Permission: string?,
+	Dangerous: boolean?, -- prompt for confirmation before running (see Start{ PromptType })
 	Args: { Arg }?,
 	Attributes: { Attribute }?,
 	Returns: { Return }?,
@@ -36,6 +37,7 @@ export type Builder = {
 	Description: (self: Builder, text: string) -> Builder,
 	Network: (self: Builder, kind: NetworkKind) -> Builder,
 	Permission: (self: Builder, role: string) -> Builder,
+	Dangerous: (self: Builder, flag: boolean?) -> Builder,
 	Arg: (self: Builder, arg: Arg) -> Builder,
 	Attribute: (self: Builder, attr: Attribute) -> Builder,
 	Return: (self: Builder, ret: Return) -> Builder,
@@ -133,6 +135,12 @@ end
 
 function Builder:Permission(role: string)
 	self.def.Permission = role
+	return self
+end
+
+-- Mark the command dangerous so it asks for confirmation before running.
+function Builder:Dangerous(flag: boolean?)
+	self.def.Dangerous = flag ~= false
 	return self
 end
 
