@@ -20,6 +20,7 @@ local FILES = {
 	Commands = "src/Commands/init.luau",
 	Cache = "src/Cache/init.luau",
 	Query = "src/Query/init.luau",
+	Complete = "src/Complete/init.luau",
 	deps = "src/deps.luau",
 }
 

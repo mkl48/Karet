@@ -98,6 +98,9 @@ local BUILTINS: { [string]: Definition } = {
 		Validate = function(v)
 			return type(v) == "boolean" or "expected a boolean"
 		end,
+		Autocomplete = function()
+			return { "true", "false" }
+		end,
 	},
 
 	-- bare seconds, or compound short units: "30s", "5m", "1h30m", "2d", "1w" (inspired by

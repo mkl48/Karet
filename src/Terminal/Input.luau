@@ -1,9 +1,6 @@
--- The terminal's input row: a Prompt sigil + a real TextBox.
---
--- The TextBox does the actual typing (characters, IME, clipboard, caret) - Switch is not
--- involved in text entry, only in the open/close/history *actions* (wired by the
--- orchestrator). Submitting fires onSubmit(line) and records the line in a command
--- history that Up/Down navigate via historyPrev/historyNext.
+-- the input row. a prompt + a real textbox plus the autocomplete dropdown.
+-- the box does the typing, switch isnt in this path. up/down do history unless the
+-- suggestion list is open, then they move the selection. tab accepts.
 
 local UserInputService = game:GetService("UserInputService")
 
@@ -15,16 +12,27 @@ Input.__index = Input
 local FONT = Enum.Font.Code
 local TEXT_SIZE = 15
 local PROMPT_TEXT = "›"
+local MAX = 8 -- how many suggestions to show at once
+
+local function rgb(c: Color3): string
+	return string.format("rgb(%d,%d,%d)", math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
+end
 
 function Input.new(parent: Instance)
 	local self = setmetatable({}, Input)
 
 	self.history = {} :: { string }
-	self.historyIndex = 0 -- 0 = editing a fresh line; 1..#history = browsing
-	self.draft = "" -- the in-progress line stashed while browsing history
+	self.historyIndex = 0
+	self.draft = ""
 	self.submitHandler = nil :: ((string) -> ())?
 	self.palette = nil :: any
 	self.focused = false
+
+	self.suggester = nil :: ((string) -> { any })?
+	self.suggestions = {} :: { any }
+	self.sugIndex = 0
+	self.sugLabels = {} :: { TextLabel }
+	self._settingText = false
 
 	local prompt = create("TextLabel", {
 		Name = "Prompt",
@@ -45,7 +53,7 @@ function Input.new(parent: Instance)
 		Font = FONT,
 		TextSize = TEXT_SIZE,
 		Text = "",
-		PlaceholderText = "type a command…",
+		PlaceholderText = "type a command",
 		ClearTextOnFocus = false,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Center,
@@ -58,40 +66,84 @@ function Input.new(parent: Instance)
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 0, 26),
 		Children = {
-			create("UIPadding", {
-				PaddingLeft = UDim.new(0, 8),
-				PaddingRight = UDim.new(0, 8),
-			}),
+			create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
 			prompt,
 			box,
 		},
 		Parent = parent,
 	})
 
+	-- the dropdown sits just above the input and grows upward
+	local sugStroke = create("UIStroke", { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+	local sugFrame = create("Frame", {
+		Name = "Suggestions",
+		Visible = false,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 18, 0, -4),
+		Size = UDim2.fromOffset(300, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BorderSizePixel = 0,
+		ZIndex = 50,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			sugStroke,
+			create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }),
+			create("UIPadding", {
+				PaddingTop = UDim.new(0, 4),
+				PaddingBottom = UDim.new(0, 4),
+				PaddingLeft = UDim.new(0, 6),
+				PaddingRight = UDim.new(0, 6),
+			}),
+		},
+		Parent = row,
+	})
+
 	self.frame = row
 	self.prompt = prompt
 	self.box = box
+	self.sugFrame = sugFrame
+	self.sugStroke = sugStroke
 
 	box.Focused:Connect(function()
 		self.focused = true
 	end)
 	box.FocusLost:Connect(function(enterPressed)
 		self.focused = false
+		self:hideSuggestions()
 		if enterPressed then
 			self:submit()
 		end
 	end)
 
-	-- History via UserInputService: arrow actions routed through Switch don't fire reliably
-	-- while a TextBox holds keyboard focus, so we read Up/Down here whenever the box is
-	-- focused. This is what makes history repeatable (the old Switch path fired once).
+	box:GetPropertyChangedSignal("Text"):Connect(function()
+		if self._settingText then
+			return
+		end
+		-- single line box shouldnt keep tabs, we use tab to accept
+		if string.find(box.Text, "\t") then
+			self._settingText = true
+			box.Text = string.gsub(box.Text, "\t", "")
+			self._settingText = false
+		end
+		self:refreshSuggestions()
+	end)
+
+	-- read keys here, switch doesnt fire reliably while the box has focus
 	self.inputConn = UserInputService.InputBegan:Connect(function(input)
 		if not self.focused then
 			return
 		end
-		if input.KeyCode == Enum.KeyCode.Up then
+		local key = input.KeyCode
+		local hasSug = #self.suggestions > 0
+		if key == Enum.KeyCode.Tab and hasSug then
+			self:acceptSuggestion()
+		elseif hasSug and key == Enum.KeyCode.Up then
+			self:moveSel(-1)
+		elseif hasSug and key == Enum.KeyCode.Down then
+			self:moveSel(1)
+		elseif key == Enum.KeyCode.Up then
 			self:historyPrev()
-		elseif input.KeyCode == Enum.KeyCode.Down then
+		elseif key == Enum.KeyCode.Down then
 			self:historyNext()
 		end
 	end)
@@ -108,8 +160,8 @@ function Input:submit()
 	self.box.Text = ""
 	self.historyIndex = 0
 	self.draft = ""
+	self:hideSuggestions()
 	if line ~= "" then
-		-- Avoid logging an identical consecutive command twice.
 		if self.history[#self.history] ~= line then
 			table.insert(self.history, line)
 		end
@@ -117,8 +169,7 @@ function Input:submit()
 			self.submitHandler(line)
 		end
 	end
-	-- Keep focus so you can fire commands back-to-back without re-clicking. Deferred so it
-	-- runs after this FocusLost finishes settling.
+	-- keep focus so you can fire commands back to back
 	task.defer(function()
 		if self.box.Parent then
 			self.box:CaptureFocus()
@@ -126,7 +177,101 @@ function Input:submit()
 	end)
 end
 
--- Older entry (Up arrow). Stashes the current draft on first step back.
+-- autocomplete -------------------------------------------------------------
+
+function Input:setSuggester(fn: (string) -> { any })
+	self.suggester = fn
+end
+
+function Input:refreshSuggestions()
+	if self.suggester and self.box.Text ~= "" then
+		self.suggestions = self.suggester(self.box.Text)
+	else
+		self.suggestions = {}
+	end
+	self.sugIndex = #self.suggestions > 0 and 1 or 0
+	self:renderSuggestions()
+end
+
+function Input:renderSuggestions()
+	for _, l in self.sugLabels do
+		l:Destroy()
+	end
+	table.clear(self.sugLabels)
+
+	local show = #self.suggestions > 0 and self.focused
+	self.sugFrame.Visible = show
+	if not show then
+		return
+	end
+
+	local p = self.palette
+	local fg = (p and p.Foreground) or Color3.new(1, 1, 1)
+	local sel = (p and p.Selection) or Color3.fromRGB(60, 60, 80)
+	local muted = p and p.Muted
+
+	for i, sug in self.suggestions do
+		if i > MAX then
+			break
+		end
+		local text = sug.text
+		if sug.detail ~= "" and muted then
+			text = `{sug.text}  <font color="{rgb(muted)}" size="11">{sug.detail}</font>`
+		end
+		local label = create("TextLabel", {
+			Name = "Sug",
+			BackgroundColor3 = sel,
+			BackgroundTransparency = i == self.sugIndex and 0 or 1,
+			Size = UDim2.new(1, 0, 0, 18),
+			Font = FONT,
+			TextSize = 13,
+			RichText = true,
+			Text = text,
+			TextColor3 = fg,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = i,
+			ZIndex = 51,
+			Parent = self.sugFrame,
+		}) :: TextLabel
+		table.insert(self.sugLabels, label)
+	end
+end
+
+function Input:moveSel(delta: number)
+	local n = math.min(#self.suggestions, MAX)
+	if n == 0 then
+		return
+	end
+	self.sugIndex = ((self.sugIndex - 1 + delta) % n) + 1
+	self:renderSuggestions()
+end
+
+function Input:replaceLastToken(text: string, insert: string): string
+	local trailing = string.match(text, "%S*$") or ""
+	return string.sub(text, 1, #text - #trailing) .. insert
+end
+
+function Input:acceptSuggestion()
+	local sug = self.suggestions[self.sugIndex]
+	if not sug then
+		return
+	end
+	local newText = self:replaceLastToken(self.box.Text, sug.insert) .. " "
+	self._settingText = true
+	self.box.Text = newText
+	self.box.CursorPosition = #newText + 1
+	self._settingText = false
+	self:refreshSuggestions()
+end
+
+function Input:hideSuggestions()
+	self.suggestions = {}
+	self.sugIndex = 0
+	self:renderSuggestions()
+end
+
+-- history ------------------------------------------------------------------
+
 function Input:historyPrev()
 	if #self.history == 0 then
 		return
@@ -141,7 +286,6 @@ function Input:historyPrev()
 	self.box.CursorPosition = #self.box.Text + 1
 end
 
--- Newer entry (Down arrow). Past the newest entry restores the stashed draft.
 function Input:historyNext()
 	if self.historyIndex == 0 then
 		return
@@ -169,6 +313,9 @@ function Input:applyTheme(palette: { [string]: Color3 })
 	self.prompt.TextColor3 = palette.Prompt
 	self.box.TextColor3 = palette.Foreground
 	self.box.PlaceholderColor3 = palette.Muted
+	self.sugFrame.BackgroundColor3 = palette.Surface
+	self.sugStroke.Color = palette.Border
+	self:renderSuggestions()
 end
 
 function Input:destroy()

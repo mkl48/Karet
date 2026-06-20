@@ -54,6 +54,7 @@ local Kaveat = require(script.Kaveat)
 local Cache = require(script.Cache)
 local Query = require(script.Query)
 local Profile = require(script.Profile)
+local Complete = require(script.Complete)
 local ContextMod = require(script.Context)
 
 -- ---------------------------------------------------------------------------
@@ -261,6 +262,8 @@ local function startClient(options: StartConfig)
 	terminal:mount()
 	-- back the input history with the profile so it sticks around
 	terminal.input.history = Karet.Profile.History
+	-- autocomplete from the registry + types
+	terminal.input:setSuggester(Complete.build(registry, types))
 	if options.Toggle then
 		local ok, err = pcall(function()
 			terminal:enableSwitch(options.Toggle)
@@ -671,7 +674,102 @@ end
 
 return Commands
 ]])
-local _4 = mod("Context", _1, [[
+local _4 = mod("Complete", _1, [[
+-- figures out what to suggest for the current input line. give it the registry + types
+-- and it hands back a suggest(text) func the input box calls on every keystroke.
+-- v1 is whitespace based (no full parse yet), works on the last command in the line.
+
+local Complete = {}
+
+-- grab the bit after the last chain op / newline, thats the command were typing
+local function lastSegment(text: string): string
+	local cut = 0
+	for _, pat in { "&&", "||", "&", ";", "\n" } do
+		local s = 1
+		while true do
+			local i = string.find(text, pat, s, true)
+			if not i then
+				break
+			end
+			cut = math.max(cut, i + #pat - 1)
+			s = i + 1
+		end
+	end
+	return string.sub(text, cut + 1)
+end
+
+local function tokens(seg: string): { string }
+	local out = {}
+	for word in string.gmatch(seg, "%S+") do
+		table.insert(out, word)
+	end
+	return out
+end
+
+export type Suggestion = { text: string, detail: string, insert: string }
+
+function Complete.build(registry: any, types: any): (text: string) -> { Suggestion }
+	return function(text: string): { Suggestion }
+		local seg = lastSegment(text)
+		local words = tokens(seg)
+		local trailingSpace = string.match(seg, "%s$") ~= nil
+		local out: { Suggestion } = {}
+
+		if #words == 0 then
+			return out
+		end
+
+		-- still on the command word
+		if #words == 1 and not trailingSpace then
+			local prefix = string.lower(words[1])
+			for _, name in registry:list() do
+				if string.sub(string.lower(name), 1, #prefix) == prefix then
+					local def = registry:get(name)
+					table.insert(out, { text = name, detail = (def and def.Description) or "", insert = name })
+				end
+			end
+			return out
+		end
+
+		-- onto args / flags
+		local def = registry:get(words[1])
+		if not def then
+			return out
+		end
+		local partial = trailingSpace and "" or words[#words]
+
+		if string.sub(partial, 1, 1) == "-" then
+			local p = string.lower((string.gsub(partial, "^%-+", "")))
+			for _, attr in def.Attributes or {} do
+				local short = attr.Short
+				if string.sub(string.lower(attr.Name), 1, #p) == p or (short and string.lower(short) == p) then
+					local flag = "-" .. (short or attr.Name)
+					table.insert(out, { text = flag, detail = attr.Description or attr.Name, insert = flag })
+				end
+			end
+			return out
+		end
+
+		-- which arg are we on (1 based). flags arent counted properly yet, good enough
+		local argIndex = (#words - 1) + (trailingSpace and 1 or 0)
+		local spec = (def.Args or {})[argIndex]
+		if spec then
+			local lower = string.lower(partial)
+			for _, typeName in spec.Types do
+				for _, s in types:autocomplete(typeName, partial) do
+					if string.sub(string.lower(s), 1, #lower) == lower then
+						table.insert(out, { text = s, detail = typeName, insert = s })
+					end
+				end
+			end
+		end
+		return out
+	end
+end
+
+return Complete
+]])
+local _5 = mod("Context", _1, [[
 -- Builds the `ctx` object passed to every command handler (DESIGN → ctx reference).
 --
 -- Context.new(opts) returns (ctx, control): `ctx` is the handler-facing surface; `control`
@@ -1122,7 +1220,7 @@ end
 
 return Host
 ]])
-local _5 = mod("Iris", _1, [==[
+local _6 = mod("Iris", _1, [==[
 --!optimize 2
 local Types = require(script.Types)
 
@@ -1820,7 +1918,7 @@ require(script.API)(Iris)
 
 return Iris
 ]==])
-mod("API", _5, [==[
+mod("API", _6, [==[
 local Types = require(script.Parent.Types)
 
 return function(Iris: Types.Iris)
@@ -3907,7 +4005,7 @@ return function(Iris: Types.Iris)
     end
 end
 ]==])
-mod("Internal", _5, [==[
+mod("Internal", _6, [==[
 local Types = require(script.Parent.Types)
 
 return function(Iris: Types.Iris): Types.Internal
@@ -4804,7 +4902,7 @@ return function(Iris: Types.Iris): Types.Internal
     return Internal
 end
 ]==])
-mod("PubTypes", _5, [[
+mod("PubTypes", _6, [[
 local Types = require(script.Parent.Types)
 
 export type ID = Types.ID
@@ -4849,7 +4947,7 @@ export type Iris = Types.Iris
 
 return {}
 ]])
-mod("Types", _5, [=[
+mod("Types", _6, [=[
 local WidgetTypes = require(script.Parent.WidgetTypes)
 
 export type ID = WidgetTypes.ID
@@ -5511,7 +5609,7 @@ export type Iris = {
 
 return {}
 ]=])
-mod("WidgetTypes", _5, [[
+mod("WidgetTypes", _6, [[
 --[=[
     @within Iris
     @type ID string
@@ -6034,7 +6132,7 @@ export type Table = ParentWidget & {
 
 return {}
 ]])
-mod("config", _5, [[
+mod("config", _6, [[
 local TemplateConfig = {
     colorDark = { -- Dear, ImGui default dark
         TextColor = Color3.fromRGB(255, 255, 255),
@@ -6341,7 +6439,7 @@ local TemplateConfig = {
 
 return TemplateConfig
 ]])
-mod("demoWindow", _5, [=[
+mod("demoWindow", _6, [=[
 local Types = require(script.Parent.Types)
 
 return function(Iris: Types.Iris)
@@ -8302,7 +8400,7 @@ return function(Iris: Types.Iris)
     end
 end
 ]=])
-local _6 = mod("widgets", _5, [[
+local _7 = mod("widgets", _6, [[
 local Types = require(script.Parent.Types)
 
 local widgets = {} :: Types.WidgetUtility
@@ -8751,7 +8849,7 @@ return function(Iris: Types.Internal)
     require(script.Table)(Iris, widgets)
 end
 ]])
-mod("Button", _6, [[
+mod("Button", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -8843,7 +8941,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     )
 end
 ]])
-mod("Checkbox", _6, [[
+mod("Checkbox", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -8960,7 +9058,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Combo", _6, [[
+mod("Combo", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -9454,7 +9552,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Format", _6, [[
+mod("Format", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -9596,7 +9694,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Image", _6, [[
+mod("Image", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -9753,7 +9851,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     )
 end
 ]])
-mod("Input", _6, [=[
+mod("Input", _7, [=[
 local Types = require(script.Parent.Parent.Types)
 
 type InputDataTypes = "Num" | "Vector2" | "Vector3" | "UDim" | "UDim2" | "Color3" | "Color4" | "Rect" | "Enum" | "" | string
@@ -10987,7 +11085,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]=])
-mod("Menu", _6, [[
+mod("Menu", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -11588,7 +11686,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Plot", _6, [[
+mod("Plot", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -12229,7 +12327,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("RadioButton", _6, [[
+mod("RadioButton", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -12357,7 +12455,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Root", _6, [[
+mod("Root", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -12502,7 +12600,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Tab", _6, [[
+mod("Tab", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -12837,7 +12935,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Table", _6, [=[
+mod("Table", _7, [=[
 local Types = require(script.Parent.Parent.Types)
 
 -- Tables need an overhaul.
@@ -13471,7 +13569,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]=])
-mod("Text", _6, [[
+mod("Text", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -13605,7 +13703,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-mod("Tree", _6, [[
+mod("Tree", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -13894,7 +13992,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     )
 end
 ]])
-mod("Window", _6, [[
+mod("Window", _7, [[
 local Types = require(script.Parent.Parent.Types)
 
 return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
@@ -14971,7 +15069,7 @@ return function(Iris: Types.Internal, widgets: Types.WidgetUtility)
     } :: Types.WidgetClass)
 end
 ]])
-local _7 = mod("Kaveat", _1, [[
+local _8 = mod("Kaveat", _1, [[
 -- Kaveat - Karet's built-in Luau editor, rendered with Iris (immediate-mode), themed from
 -- the Karet palette so it reads custom rather than default-Iris.
 --
@@ -15172,7 +15270,7 @@ end
 
 return Kaveat
 ]])
-local _8 = mod("Networking", _1, [[
+local _9 = mod("Networking", _1, [[
 -- The client/server transport for Karet commands, over Substance.
 --
 -- Only Server and Context commands cross the boundary; Shared/Client run entirely on the
@@ -15282,7 +15380,7 @@ end
 
 return Networking
 ]])
-local _9 = mod("Profile", _1, [[
+local _10 = mod("Profile", _1, [[
 -- a profile holds the per user stuff, history, the theme they picked, saved kav scripts
 -- and any custom commands. its just in memory for now, can hook it to a datastore later
 
@@ -15309,7 +15407,7 @@ end
 
 return Profile
 ]])
-local _10 = mod("Query", _1, [[
+local _11 = mod("Query", _1, [[
 -- A named-query registry. Karet (and your game) registers providers - "players", "teams",
 -- "commands", whatever - and commands run them by name through ctx.Query. This gives
 -- commands a uniform way to look things up without each one re-implementing resolution.
@@ -15361,7 +15459,7 @@ end
 
 return Query
 ]])
-local _11 = mod("Registry", _1, [[
+local _12 = mod("Registry", _1, [[
 -- The command registry. Holds command definitions, resolves names + aliases
 -- (case-insensitively), and offers the fluent builder (sugar over the table form).
 --
@@ -15526,7 +15624,7 @@ end
 
 return Registry
 ]])
-local _12 = mod("Shell", _1, [[
+local _13 = mod("Shell", _1, [[
 -- The Karet shell: the tokenizer + parser + evaluator that turn a line of input into an
 -- executed chain. This is the power-user surface; the umbrella `Karet` re-exports the
 -- common entry points (Karet.Tokenize / Parse / Analyze / ...) flat.
@@ -15576,7 +15674,7 @@ end
 
 return Shell
 ]])
-mod("Ast", _12, [[
+mod("Ast", _13, [[
 -- AST node kinds for the Karet shell. The parser builds plain tables tagged with a
 -- `kind` from Ast.Kind; the evaluator dispatches on it. See GRAMMAR.md §3.
 
@@ -15606,7 +15704,7 @@ Ast.Kind = {
 
 return Ast
 ]])
-mod("Evaluator", _12, [[
+mod("Evaluator", _13, [[
 -- The Karet shell evaluator: walk an AST, run chains/guards, drive the return pool and
 -- session variables, and evaluate expressions/type-guards.
 --
@@ -16024,7 +16122,7 @@ end
 
 return Evaluator
 ]])
-mod("Lexer", _12, [[
+mod("Lexer", _13, [[
 -- The Karet shell lexer: source text -> a flat list of neutral tokens.
 --
 -- Neutral means: no FLAG / DIRECTIVE / SLASH_REF / SLASH_DIV tokens. `-`, `--`, `/`,
@@ -16364,7 +16462,7 @@ end
 
 return Lexer
 ]])
-mod("Parser", _12, [[
+mod("Parser", _13, [[
 -- Recursive-descent parser for the Karet shell. Tokens -> AST + diagnostics.
 --
 -- The parser is where context lives (GRAMMAR.md §1): the same `/` token becomes a
@@ -16931,7 +17029,7 @@ end
 
 return Parser
 ]])
-mod("ReturnPool", _12, [[
+mod("ReturnPool", _13, [[
 -- The return pool (GRAMMAR.md §5). Commands push typed/labelled return records; `/`
 -- references read them back. There is no positional stack - you reference returns by
 -- what they are. Failed links contribute nothing, so the pool only holds real results.
@@ -17042,7 +17140,7 @@ end
 
 return ReturnPool
 ]])
-mod("Token", _12, [[
+mod("Token", _13, [[
 -- Token kinds and the Token shape for the Karet shell lexer.
 --
 -- The lexer is deliberately neutral (see GRAMMAR.md §2): it never decides whether a
@@ -17118,7 +17216,7 @@ export type Token = {
 
 return Token
 ]])
-local _13 = mod("Substance", _1, [[
+local _14 = mod("Substance", _1, [[
 -- Substance
 -- init.lua
 -- Plinko Labs
@@ -17190,7 +17288,7 @@ Substance.Type = Particle.Type
 
 return Substance
 ]])
-local _14 = mod("Async", _13, [[
+local _15 = mod("Async", _14, [[
 -- Substance
 -- Async/init.lua
 -- Plinko Labs
@@ -17203,7 +17301,7 @@ return {
 	Branch = Branch,
 }
 ]])
-mod("Branch", _14, [[
+mod("Branch", _15, [[
 -- Substance
 -- Async/Branch.lua
 -- Plinko Labs
@@ -17230,7 +17328,7 @@ end
 
 return Branch
 ]])
-mod("Promise", _14, [==[
+mod("Promise", _15, [==[
 --[[
 	An implementation of Promises similar to Promise/A+.
 ]]
@@ -19213,7 +19311,7 @@ function Promise.onUnhandledRejection(callback)
 end
 
 return Promise]==])
-mod("Reaction", _14, [[
+mod("Reaction", _15, [[
 -- Substance
 -- Async/Reaction.lua
 -- Plinko Labs
@@ -19360,7 +19458,7 @@ end
 
 return Reaction
 ]])
-local _15 = mod("Particle", _13, [[
+local _16 = mod("Particle", _14, [[
 -- Substance
 -- Particle/init.lua
 -- Plinko Labs
@@ -19401,7 +19499,7 @@ end
 
 return Particle
 ]])
-mod("Atom", _15, [[
+mod("Atom", _16, [[
 -- Substance
 -- Particle/Atom.lua
 -- Plinko Labs
@@ -19472,7 +19570,7 @@ end
 
 return Atom
 ]])
-mod("Dispatch", _15, [[
+mod("Dispatch", _16, [[
 -- Substance
 -- Particle/Dispatch.lua
 -- Plinko Labs
@@ -19679,7 +19777,7 @@ end
 
 return Dispatch
 ]])
-mod("Fossil", _15, [[
+mod("Fossil", _16, [[
 -- Substance
 -- Particle/Fossil.lua
 -- Plinko Labs
@@ -19730,7 +19828,7 @@ end
 
 return Fossil
 ]])
-mod("Hooks", _15, [[
+mod("Hooks", _16, [[
 -- Substance
 -- Particle/Hooks.lua
 -- Plinko Labs
@@ -19784,7 +19882,7 @@ end
 
 return Hooks
 ]])
-mod("Molecule", _15, [[
+mod("Molecule", _16, [[
 -- Substance
 -- Particle/Molecule.lua
 -- Plinko Labs
@@ -19839,7 +19937,7 @@ end
 
 return Molecule
 ]])
-mod("Registry", _15, [[
+mod("Registry", _16, [[
 -- Substance
 -- Particle/Registry.lua
 -- Plinko Labs
@@ -19886,7 +19984,7 @@ end
 
 return Registry
 ]])
-mod("Remotes", _15, [[
+mod("Remotes", _16, [[
 -- Substance
 -- Particle/Remotes.lua
 -- Plinko Labs
@@ -19944,7 +20042,7 @@ end
 
 return Remotes
 ]])
-mod("Schema", _15, [[
+mod("Schema", _16, [[
 -- Substance
 -- Particle/Schema.lua
 -- Plinko Labs
@@ -20031,14 +20129,14 @@ end
 
 return Schema
 ]])
-local _16 = mod("Type", _15, [[
+local _17 = mod("Type", _16, [[
 -- Substance
 -- Particle/Type/init.lua
 -- Plinko Labs
 
 return require(script.Constructors)
 ]])
-mod("Constructors", _16, [[
+mod("Constructors", _17, [[
 -- Substance
 -- Particle/Type/Constructors.lua
 -- Plinko Labs
@@ -20207,7 +20305,7 @@ end
 
 return Type
 ]])
-mod("TypeDef", _16, [[
+mod("TypeDef", _17, [[
 -- Substance
 -- Particle/Type/TypeDef.lua
 -- Plinko Labs
@@ -20724,7 +20822,7 @@ end
 
 return TypeDef
 ]])
-mod("Types", _15, [[
+mod("Types", _16, [[
 -- Substance
 -- Particle/Types.lua
 -- Plinko Labs
@@ -20767,7 +20865,7 @@ export type Channel = {
 
 return {}
 ]])
-local _17 = mod("React", _13, [[
+local _18 = mod("React", _14, [[
 -- Substance
 -- React/init.lua
 -- Plinko Labs
@@ -20792,7 +20890,7 @@ end
 
 return React
 ]])
-mod("Entangle", _17, [[
+mod("Entangle", _18, [[
 -- Substance
 -- React/Entangle.lua
 -- Plinko Labs
@@ -20866,7 +20964,7 @@ end
 
 return Entangle
 ]])
-mod("Flux", _17, [[
+mod("Flux", _18, [[
 -- Substance
 -- React/Flux.lua
 -- Plinko Labs
@@ -20972,7 +21070,7 @@ end
 
 return Flux
 ]])
-mod("River", _17, [[
+mod("River", _18, [[
 -- Substance
 -- React/River.lua
 -- Plinko Labs
@@ -21036,7 +21134,7 @@ end
 
 return River
 ]])
-local _18 = mod("Tools", _13, [[
+local _19 = mod("Tools", _14, [[
 -- Substance
 -- Tools/init.lua
 -- Plinko Labs
@@ -21066,7 +21164,7 @@ end
 
 return Tools
 ]])
-mod("Batch", _18, [[
+mod("Batch", _19, [[
 -- Substance
 -- Tools/Batch.lua
 -- Plinko Labs
@@ -21100,7 +21198,7 @@ end
 
 return Batch
 ]])
-mod("Fission", _18, [[
+mod("Fission", _19, [[
 -- Substance
 -- Tools/Fission.lua
 -- Plinko Labs
@@ -21132,7 +21230,7 @@ end
 
 return Fission
 ]])
-mod("Fossil", _18, [[
+mod("Fossil", _19, [[
 -- Substance
 -- Tools/Fossil.lua
 -- Plinko Labs
@@ -21147,7 +21245,7 @@ return {
 	Clear = ParticleFossil.Clear,
 }
 ]])
-mod("Hooks", _18, [[
+mod("Hooks", _19, [[
 -- Substance
 -- Tools/Hooks.lua
 -- Plinko Labs
@@ -21159,7 +21257,7 @@ return {
 	Hook = ParticleHooks.Hook,
 }
 ]])
-mod("LandLine", _18, [[
+mod("LandLine", _19, [[
 -- Substance
 -- Tools/LandLine.lua
 -- Plinko Labs
@@ -21205,7 +21303,7 @@ end
 
 return LandLine
 ]])
-local _19 = mod("Switch", _1, [[
+local _20 = mod("Switch", _1, [[
 local Enums    = require(script.Enums)
 local Platform = require(script.Platform)
 local Context  = require(script.Context)
@@ -21296,7 +21394,7 @@ function Switch.OnContextChanged(cb: ({ string }) -> ()): () -> ()
 end
 
 return Switch]])
-mod("Action", _19, [[
+mod("Action", _20, [[
 -- Switch
 -- Action.lua
 -- Plinko Labs
@@ -22035,7 +22133,7 @@ function Action:Destroy()
 end
 
 return Action]])
-mod("Connection", _19, [[
+mod("Connection", _20, [[
 -- Switch
 -- Connection.lua
 -- Plinko Labs
@@ -22139,7 +22237,7 @@ return {
 	Connection = Connection,
 	Promise    = Promise,
 }]])
-mod("Context", _19, [[
+mod("Context", _20, [[
 -- Switch
 -- Context.lua
 -- Plinko Labs
@@ -22315,7 +22413,7 @@ function Context.OnChanged(cb: (stack: { string }) -> ()): () -> ()
 end
 
 return Context]])
-mod("Enums", _19, [[
+mod("Enums", _20, [[
 -- Switch
 -- Enums.lua
 -- Plinko Labs
@@ -22406,7 +22504,7 @@ Enums.Driver = {
 }
 
 return Enums]])
-mod("Platform", _19, [[
+mod("Platform", _20, [[
 -- Switch
 -- Platform.lua
 -- Plinko Labs
@@ -22481,7 +22579,7 @@ function Platform.OnChanged(cb: (new: Platform, prev: Platform) -> ()): () -> ()
 end
 
 return Platform]])
-mod("Promise", _19, [==[
+mod("Promise", _20, [==[
 --[[
 	An implementation of Promises similar to Promise/A+.
 ]]
@@ -24464,7 +24562,7 @@ function Promise.onUnhandledRejection(callback)
 end
 
 return Promise]==])
-mod("Registry", _19, [[
+mod("Registry", _20, [[
 -- Switch
 -- Registry.lua
 -- Plinko Labs
@@ -24600,7 +24698,7 @@ function Registry.All(): { Types.ActionHandle }
 end
 
 return Registry]])
-mod("Types", _19, [[
+mod("Types", _20, [[
 -- Switch
 -- Types.lua
 -- Plinko Labs
@@ -24695,7 +24793,7 @@ export type ActionHandle = {
 }
 
 return {}]])
-local _20 = mod("Terminal", _1, [[
+local _21 = mod("Terminal", _1, [[
 -- Karet.Terminal - the visible console surface (the Alacritty analogue).
 --
 -- Composes the window chrome, the scrolling Output log, and the Input row, drives them all
@@ -25197,13 +25295,10 @@ end
 
 return Terminal
 ]])
-mod("Input", _20, [[
--- The terminal's input row: a Prompt sigil + a real TextBox.
---
--- The TextBox does the actual typing (characters, IME, clipboard, caret) - Switch is not
--- involved in text entry, only in the open/close/history *actions* (wired by the
--- orchestrator). Submitting fires onSubmit(line) and records the line in a command
--- history that Up/Down navigate via historyPrev/historyNext.
+mod("Input", _21, [[
+-- the input row. a prompt + a real textbox plus the autocomplete dropdown.
+-- the box does the typing, switch isnt in this path. up/down do history unless the
+-- suggestion list is open, then they move the selection. tab accepts.
 
 local UserInputService = game:GetService("UserInputService")
 
@@ -25215,16 +25310,27 @@ Input.__index = Input
 local FONT = Enum.Font.Code
 local TEXT_SIZE = 15
 local PROMPT_TEXT = "›"
+local MAX = 8 -- how many suggestions to show at once
+
+local function rgb(c: Color3): string
+	return string.format("rgb(%d,%d,%d)", math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
+end
 
 function Input.new(parent: Instance)
 	local self = setmetatable({}, Input)
 
 	self.history = {} :: { string }
-	self.historyIndex = 0 -- 0 = editing a fresh line; 1..#history = browsing
-	self.draft = "" -- the in-progress line stashed while browsing history
+	self.historyIndex = 0
+	self.draft = ""
 	self.submitHandler = nil :: ((string) -> ())?
 	self.palette = nil :: any
 	self.focused = false
+
+	self.suggester = nil :: ((string) -> { any })?
+	self.suggestions = {} :: { any }
+	self.sugIndex = 0
+	self.sugLabels = {} :: { TextLabel }
+	self._settingText = false
 
 	local prompt = create("TextLabel", {
 		Name = "Prompt",
@@ -25245,7 +25351,7 @@ function Input.new(parent: Instance)
 		Font = FONT,
 		TextSize = TEXT_SIZE,
 		Text = "",
-		PlaceholderText = "type a command…",
+		PlaceholderText = "type a command",
 		ClearTextOnFocus = false,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Center,
@@ -25258,40 +25364,84 @@ function Input.new(parent: Instance)
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 0, 26),
 		Children = {
-			create("UIPadding", {
-				PaddingLeft = UDim.new(0, 8),
-				PaddingRight = UDim.new(0, 8),
-			}),
+			create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
 			prompt,
 			box,
 		},
 		Parent = parent,
 	})
 
+	-- the dropdown sits just above the input and grows upward
+	local sugStroke = create("UIStroke", { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+	local sugFrame = create("Frame", {
+		Name = "Suggestions",
+		Visible = false,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 18, 0, -4),
+		Size = UDim2.fromOffset(300, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BorderSizePixel = 0,
+		ZIndex = 50,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			sugStroke,
+			create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }),
+			create("UIPadding", {
+				PaddingTop = UDim.new(0, 4),
+				PaddingBottom = UDim.new(0, 4),
+				PaddingLeft = UDim.new(0, 6),
+				PaddingRight = UDim.new(0, 6),
+			}),
+		},
+		Parent = row,
+	})
+
 	self.frame = row
 	self.prompt = prompt
 	self.box = box
+	self.sugFrame = sugFrame
+	self.sugStroke = sugStroke
 
 	box.Focused:Connect(function()
 		self.focused = true
 	end)
 	box.FocusLost:Connect(function(enterPressed)
 		self.focused = false
+		self:hideSuggestions()
 		if enterPressed then
 			self:submit()
 		end
 	end)
 
-	-- History via UserInputService: arrow actions routed through Switch don't fire reliably
-	-- while a TextBox holds keyboard focus, so we read Up/Down here whenever the box is
-	-- focused. This is what makes history repeatable (the old Switch path fired once).
+	box:GetPropertyChangedSignal("Text"):Connect(function()
+		if self._settingText then
+			return
+		end
+		-- single line box shouldnt keep tabs, we use tab to accept
+		if string.find(box.Text, "\t") then
+			self._settingText = true
+			box.Text = string.gsub(box.Text, "\t", "")
+			self._settingText = false
+		end
+		self:refreshSuggestions()
+	end)
+
+	-- read keys here, switch doesnt fire reliably while the box has focus
 	self.inputConn = UserInputService.InputBegan:Connect(function(input)
 		if not self.focused then
 			return
 		end
-		if input.KeyCode == Enum.KeyCode.Up then
+		local key = input.KeyCode
+		local hasSug = #self.suggestions > 0
+		if key == Enum.KeyCode.Tab and hasSug then
+			self:acceptSuggestion()
+		elseif hasSug and key == Enum.KeyCode.Up then
+			self:moveSel(-1)
+		elseif hasSug and key == Enum.KeyCode.Down then
+			self:moveSel(1)
+		elseif key == Enum.KeyCode.Up then
 			self:historyPrev()
-		elseif input.KeyCode == Enum.KeyCode.Down then
+		elseif key == Enum.KeyCode.Down then
 			self:historyNext()
 		end
 	end)
@@ -25308,8 +25458,8 @@ function Input:submit()
 	self.box.Text = ""
 	self.historyIndex = 0
 	self.draft = ""
+	self:hideSuggestions()
 	if line ~= "" then
-		-- Avoid logging an identical consecutive command twice.
 		if self.history[#self.history] ~= line then
 			table.insert(self.history, line)
 		end
@@ -25317,8 +25467,7 @@ function Input:submit()
 			self.submitHandler(line)
 		end
 	end
-	-- Keep focus so you can fire commands back-to-back without re-clicking. Deferred so it
-	-- runs after this FocusLost finishes settling.
+	-- keep focus so you can fire commands back to back
 	task.defer(function()
 		if self.box.Parent then
 			self.box:CaptureFocus()
@@ -25326,7 +25475,101 @@ function Input:submit()
 	end)
 end
 
--- Older entry (Up arrow). Stashes the current draft on first step back.
+-- autocomplete -------------------------------------------------------------
+
+function Input:setSuggester(fn: (string) -> { any })
+	self.suggester = fn
+end
+
+function Input:refreshSuggestions()
+	if self.suggester and self.box.Text ~= "" then
+		self.suggestions = self.suggester(self.box.Text)
+	else
+		self.suggestions = {}
+	end
+	self.sugIndex = #self.suggestions > 0 and 1 or 0
+	self:renderSuggestions()
+end
+
+function Input:renderSuggestions()
+	for _, l in self.sugLabels do
+		l:Destroy()
+	end
+	table.clear(self.sugLabels)
+
+	local show = #self.suggestions > 0 and self.focused
+	self.sugFrame.Visible = show
+	if not show then
+		return
+	end
+
+	local p = self.palette
+	local fg = (p and p.Foreground) or Color3.new(1, 1, 1)
+	local sel = (p and p.Selection) or Color3.fromRGB(60, 60, 80)
+	local muted = p and p.Muted
+
+	for i, sug in self.suggestions do
+		if i > MAX then
+			break
+		end
+		local text = sug.text
+		if sug.detail ~= "" and muted then
+			text = `{sug.text}  <font color="{rgb(muted)}" size="11">{sug.detail}</font>`
+		end
+		local label = create("TextLabel", {
+			Name = "Sug",
+			BackgroundColor3 = sel,
+			BackgroundTransparency = i == self.sugIndex and 0 or 1,
+			Size = UDim2.new(1, 0, 0, 18),
+			Font = FONT,
+			TextSize = 13,
+			RichText = true,
+			Text = text,
+			TextColor3 = fg,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = i,
+			ZIndex = 51,
+			Parent = self.sugFrame,
+		}) :: TextLabel
+		table.insert(self.sugLabels, label)
+	end
+end
+
+function Input:moveSel(delta: number)
+	local n = math.min(#self.suggestions, MAX)
+	if n == 0 then
+		return
+	end
+	self.sugIndex = ((self.sugIndex - 1 + delta) % n) + 1
+	self:renderSuggestions()
+end
+
+function Input:replaceLastToken(text: string, insert: string): string
+	local trailing = string.match(text, "%S*$") or ""
+	return string.sub(text, 1, #text - #trailing) .. insert
+end
+
+function Input:acceptSuggestion()
+	local sug = self.suggestions[self.sugIndex]
+	if not sug then
+		return
+	end
+	local newText = self:replaceLastToken(self.box.Text, sug.insert) .. " "
+	self._settingText = true
+	self.box.Text = newText
+	self.box.CursorPosition = #newText + 1
+	self._settingText = false
+	self:refreshSuggestions()
+end
+
+function Input:hideSuggestions()
+	self.suggestions = {}
+	self.sugIndex = 0
+	self:renderSuggestions()
+end
+
+-- history ------------------------------------------------------------------
+
 function Input:historyPrev()
 	if #self.history == 0 then
 		return
@@ -25341,7 +25584,6 @@ function Input:historyPrev()
 	self.box.CursorPosition = #self.box.Text + 1
 end
 
--- Newer entry (Down arrow). Past the newest entry restores the stashed draft.
 function Input:historyNext()
 	if self.historyIndex == 0 then
 		return
@@ -25369,6 +25611,9 @@ function Input:applyTheme(palette: { [string]: Color3 })
 	self.prompt.TextColor3 = palette.Prompt
 	self.box.TextColor3 = palette.Foreground
 	self.box.PlaceholderColor3 = palette.Muted
+	self.sugFrame.BackgroundColor3 = palette.Surface
+	self.sugStroke.Color = palette.Border
+	self:renderSuggestions()
 end
 
 function Input:destroy()
@@ -25381,7 +25626,7 @@ end
 
 return Input
 ]])
-mod("Output", _20, [[
+mod("Output", _21, [[
 -- The terminal's scrolling output log. Each line is a TextLabel coloured by a semantic
 -- theme group (Output / Error / Warn / Info / Success / Comment for echoes), so a theme
 -- switch recolours the whole backlog. Lines remember their group, which is what lets
@@ -25491,7 +25736,7 @@ end
 
 return Output
 ]])
-mod("create", _20, [[
+mod("create", _21, [[
 -- Tiny declarative Instance builder for the terminal UI.
 --
 -- create("Frame", { Size = ..., Children = { ... }, Parent = ... }) sets every property,
@@ -25522,7 +25767,7 @@ end
 
 return create
 ]])
-local _21 = mod("Theme", _1, [[
+local _22 = mod("Theme", _1, [[
 -- Karet.Theme - one semantic colorscheme, piped through every surface (DESIGN → Theme).
 --
 -- A theme is NOT a set of raw frame colors; it is a set of *semantic highlight groups*
@@ -25958,7 +26203,7 @@ Theme.Set("tokyonight")
 
 return Theme
 ]])
-local _22 = mod("Types", _1, [[
+local _23 = mod("Types", _1, [[
 -- Karet's argument type system. A type knows how to Parse a raw token into a value, and
 -- to Validate that value. `coerce` tries a union of types left-to-right (the first that
 -- parses AND validates wins - GRAMMAR/DESIGN), so handlers never type-check. `satisfies`
@@ -26058,6 +26303,9 @@ local BUILTINS: { [string]: Definition } = {
 		end,
 		Validate = function(v)
 			return type(v) == "boolean" or "expected a boolean"
+		end,
+		Autocomplete = function()
+			return { "true", "false" }
 		end,
 	},
 
@@ -26344,5 +26592,5 @@ end
 return deps
 ]])
 
-print("[Karet] installed 85 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 86 modules under ReplicatedStorage.Karet")
 return true

@@ -22,6 +22,7 @@ local Kaveat = require(script.Kaveat)
 local Cache = require(script.Cache)
 local Query = require(script.Query)
 local Profile = require(script.Profile)
+local Complete = require(script.Complete)
 local ContextMod = require(script.Context)
 
 -- ---------------------------------------------------------------------------
@@ -229,6 +230,8 @@ local function startClient(options: StartConfig)
 	terminal:mount()
 	-- back the input history with the profile so it sticks around
 	terminal.input.history = Karet.Profile.History
+	-- autocomplete from the registry + types
+	terminal.input:setSuggester(Complete.build(registry, types))
 	if options.Toggle then
 		local ok, err = pcall(function()
 			terminal:enableSwitch(options.Toggle)
