@@ -12,12 +12,89 @@
 -- Iris is client-only; off the terminal ctx.Window hands back a no-op with the same shape.
 
 local deps = require(script.Parent.deps)
+local Theme = require(script.Parent.Theme)
+local Defaults = require(script.Parent.Defaults)
 
 local WindowManager = {}
 
 local iris: any = nil
 local started = false
+local themed = false
 local windows: { any } = {}
+
+-- Map Karet's active palette onto Iris' (ImGui-style) config so windows match the rest of
+-- the library instead of looking like stock Iris. Re-applied whenever the theme switches.
+local function applyTheme()
+	if not iris then
+		return
+	end
+	local p = Theme.Get()
+	pcall(iris.UpdateGlobalConfig, {
+		TextFont = Font.fromEnum(Defaults.Font),
+		TextColor = p.Foreground,
+		TextTransparency = 0,
+		TextDisabledColor = p.Muted,
+
+		WindowBgColor = p.Background,
+		WindowBgTransparency = 0,
+		PopupBgColor = p.Surface,
+		PopupBgTransparency = 0,
+
+		TitleBgColor = p.Surface,
+		TitleBgTransparency = 0,
+		TitleBgActiveColor = p.Surface,
+		TitleBgActiveTransparency = 0,
+		TitleBgCollapsedColor = p.Surface,
+		TitleBgCollapsedTransparency = 0,
+
+		BorderColor = p.Border,
+		BorderTransparency = 0,
+		BorderActiveColor = p.Accent,
+		BorderActiveTransparency = 0,
+		WindowBorderSize = 1,
+		FrameBorderSize = 0,
+		FrameRounding = 6,
+
+		ButtonColor = p.Surface,
+		ButtonTransparency = 0,
+		ButtonHoveredColor = p.Selection,
+		ButtonHoveredTransparency = 0,
+		ButtonActiveColor = p.Accent,
+		ButtonActiveTransparency = 0,
+
+		FrameBgColor = p.Surface,
+		FrameBgTransparency = 0,
+		FrameBgHoveredColor = p.Selection,
+		FrameBgHoveredTransparency = 0,
+		FrameBgActiveColor = p.Selection,
+		FrameBgActiveTransparency = 0,
+
+		CheckMarkColor = p.Accent,
+		CheckMarkTransparency = 0,
+		SliderGrabColor = p.Accent,
+		SliderGrabTransparency = 0,
+		SliderGrabActiveColor = p.Accent,
+		SliderGrabActiveTransparency = 0,
+
+		HeaderColor = p.Selection,
+		HeaderTransparency = 0,
+		HeaderHoveredColor = p.Selection,
+		HeaderHoveredTransparency = 0,
+		HeaderActiveColor = p.Accent,
+		HeaderActiveTransparency = 0,
+
+		SeparatorColor = p.Border,
+		SeparatorTransparency = 0,
+		ScrollbarGrabColor = p.Muted,
+		ScrollbarGrabTransparency = 0,
+		ResizeGripColor = p.Muted,
+		ResizeGripTransparency = 0.4,
+		ResizeGripHoveredColor = p.Accent,
+		ResizeGripHoveredTransparency = 0,
+		ResizeGripActiveColor = p.Accent,
+		ResizeGripActiveTransparency = 0,
+	})
+end
 
 local Window = {}
 Window.__index = Window
@@ -36,6 +113,13 @@ local function ensureStarted(parent: Instance?): any?
 		return nil
 	end
 	pcall(iris.Init, parent, nil, true)
+	-- theme to match Karet, and stay matched on theme switches
+	if not themed then
+		themed = true
+		Theme.OnChanged(function()
+			applyTheme()
+		end)
+	end
 	iris:Connect(function()
 		-- iterate a snapshot - a render may close (and remove) its window
 		for _, w in table.clone(windows) do
