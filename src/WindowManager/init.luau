@@ -149,13 +149,38 @@ function WindowManager.open(opts: { [string]: any }?): any?
 	return self
 end
 
--- a text line. returns a handle so you can update it: label.set("new text")
+-- a text line. `text` may be a string OR a function evaluated every frame (for live
+-- readouts). returns a handle so you can also update a static label: label.set("...").
 function Window:Label(text: any): any
-	local spec = { kind = "text", text = tostring(text) }
+	local spec = { kind = "text", text = (type(text) == "function") and text or tostring(text) }
 	table.insert(self.widgets, spec)
 	return { set = function(t: any)
-		spec.text = tostring(t)
+		spec.text = (type(t) == "function") and t or tostring(t)
 	end }
+end
+
+-- a rolling line graph. returns { push(value) } - push a sample each frame (usually from
+-- OnRender) and it scrolls. opts = { height?, min?, max?, capacity? }.
+function Window:Plot(label: string, opts: { [string]: any }?): any
+	opts = opts or {}
+	local capacity = opts.capacity or 96
+	local values = { 0 }
+	local state = iris.State(values)
+	table.insert(self.widgets, { kind = "plot", label = label, state = state, height = opts.height or 60, min = opts.min, max = opts.max })
+	return {
+		push = function(v: number)
+			table.insert(values, v)
+			while #values > capacity do
+				table.remove(values, 1)
+			end
+			state:set(table.clone(values))
+		end,
+	}
+end
+
+-- run `fn` once per frame while the window is open (drive plots / dynamic state from here)
+function Window:OnRender(fn: () -> ())
+	self._onRender = fn
 end
 
 -- a button; onClick runs (on its own thread) when pressed
@@ -235,11 +260,24 @@ end
 
 function Window:_render()
 	local i = iris
+	if self._onRender then
+		pcall(self._onRender)
+	end
 	local ok = pcall(function()
 		i.Window({ self.title }, { isOpened = self.openState })
 		for _, w in self.widgets do
 			if w.kind == "text" then
-				i.Text({ w.text })
+				local text = w.text
+				if type(text) == "function" then
+					local okEval, result = pcall(text)
+					text = okEval and tostring(result) or "?"
+				end
+				i.Text({ text })
+			elseif w.kind == "plot" then
+				local args = { w.label, w.height }
+				args[3] = w.min
+				args[4] = w.max
+				i.PlotLines(args, { values = w.state })
 			elseif w.kind == "button" then
 				if i.Button({ w.text }).clicked() and w.onClick then
 					task.spawn(w.onClick)

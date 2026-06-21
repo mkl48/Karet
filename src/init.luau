@@ -735,6 +735,11 @@ local function startClient(options: StartConfig)
 		end)
 	end
 
+	-- the built-in Devtools extension (profiler + inspector), registered through the platform
+	pcall(function()
+		require(script.Devtools).register(Karet)
+	end)
+
 	-- built-in panels (client only), so `panels` / `open` show something out of the box and
 	-- demonstrate the platform other tools register through.
 	Karet.RegisterPanel({
