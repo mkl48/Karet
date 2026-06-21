@@ -29,6 +29,7 @@ local Defaults = require(script.Defaults)
 local WindowManager = require(script.WindowManager)
 local Alias = require(script.Alias)
 local Extensions = require(script.Extensions)
+local Admin = require(script.Admin)
 
 -- ---------------------------------------------------------------------------
 -- public types (exported so editors autocomplete config + params)
@@ -60,6 +61,7 @@ export type StartConfig = {
 	Kaveat: boolean?, -- enable the Kaveat editor
 	PromptType: ("text" | "window")?, -- how Dangerous commands confirm: terminal y/N or an Iris modal
 	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases) via Pik DataStores
+	Admin: boolean?, -- enable the moderation suite (kick/ban/mute/audit + dashboard)
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	DefaultRole: string?, -- server: default role for players
 	RateLimit: RateLimit?, -- server: rate limiting (reserved)
@@ -187,6 +189,29 @@ end
 -- a couple handy defaults; users add their own with Karet.SetVar or the `set` command
 Karet.Env.pi = math.pi
 Karet.Env.version = Karet.Version
+
+-- Run a line through the shell (alias-expanded). Used by panels/buttons (e.g. the admin
+-- dashboard) and available publicly. Returns the chain result, or nil before Start.
+function Karet.Run(line: string): any
+	if not Karet.Evaluator then
+		return nil
+	end
+	line = Alias.expand(line, Karet.Profile.Aliases)
+	local parsed = Karet.Parse(line)
+	if #parsed.diagnostics > 0 then
+		return { ok = false, error = parsed.diagnostics[1].message }
+	end
+	return Karet.Evaluator:run(parsed.ast)
+end
+
+-- Server-side: is this player muted? (set by the `mute` command; nil before Admin setup.)
+function Karet.IsMuted(player: any): boolean
+	local backend = Karet._adminBackend
+	if backend and player then
+		return backend.isMuted(player.UserId)
+	end
+	return false
+end
 
 -- Open the @CONFIG editor (wired up by startClient). The `config` command calls this.
 function Karet.OpenConfig()
@@ -740,6 +765,17 @@ local function startClient(options: StartConfig)
 		require(script.Devtools).register(Karet)
 	end)
 
+	-- moderation suite (client): register the command shapes so they parse + ship to the
+	-- server (which holds the real handlers), plus the dashboard panel.
+	if options.Admin then
+		Karet.RegisterExtension({
+			Name = "Admin",
+			Description = "moderation: kick / ban / mute / audit + dashboard",
+			Commands = Admin.defs(nil),
+			Panels = { Admin.dashboardPanel(Karet) },
+		})
+	end
+
 	-- built-in panels (client only), so `panels` / `open` show something out of the box and
 	-- demonstrate the platform other tools register through.
 	Karet.RegisterPanel({
@@ -839,6 +875,16 @@ local function startServer(options: StartConfig)
 			end)
 		else
 			warn("karet: Persist is on but Pik failed to load - " .. tostring(Pik))
+		end
+	end
+
+	-- moderation suite (server): stand up the backend and register the role-gated commands so
+	-- the server actually executes them (the client registers no-op shapes that ship here).
+	if options.Admin then
+		local backend = Admin.serverSetup(options)
+		Karet._adminBackend = backend
+		for _, def in Admin.defs(backend) do
+			registry:register(def)
 		end
 	end
 
