@@ -12,6 +12,7 @@ local deps = require(script.Parent.deps)
 local Capture = require(script.Parent.Capture)
 local create = require(script.Parent.Terminal.create)
 local LuauComplete = require(script.Complete)
+local Diagnostics = require(script.Diagnostics)
 local Defaults = require(script.Parent.Defaults)
 
 local Kaveat = {}
@@ -33,6 +34,7 @@ local CMDS = {
 	{ name = "e", detail = "open file" },
 	{ name = "new", detail = "new file" },
 	{ name = "run", detail = "run buffer" },
+	{ name = "check", detail = "lint the buffer" },
 	{ name = "server", detail = "server context" },
 	{ name = "client", detail = "client context" },
 	{ name = "ls", detail = "list kavs" },
@@ -325,7 +327,7 @@ function Kaveat:build(options)
 		Font = FONT,
 		TextSize = 13,
 		Text = "",
-		PlaceholderText = ":w  :q  :e <file>  :server  :client  :run  :ls",
+		PlaceholderText = ":w  :q  :e <file>  :server  :client  :run  :check  :ls",
 		ClearTextOnFocus = false,
 		TextXAlignment = Enum.TextXAlignment.Left,
 	})
@@ -508,7 +510,12 @@ function Kaveat:onKey(input: InputObject, processed: boolean)
 		or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
 
 	if ctrl and key == Enum.KeyCode.Return then
-		self:run()
+		-- shift runs just the selection (falls back to the whole buffer if nothing's selected)
+		if shift then
+			self:runSelection()
+		else
+			self:run()
+		end
 		return
 	end
 
@@ -860,6 +867,8 @@ function Kaveat:runCmd(text: string)
 		end
 	elseif cmd == "run" then
 		self:run()
+	elseif cmd == "check" or cmd == "lint" then
+		self:diagnose()
 	elseif cmd == "server" then
 		self:setContext("Server")
 		self:print("context: Server", "Info")
@@ -1054,6 +1063,15 @@ function Kaveat:save()
 	self:refreshTitle()
 	self:refreshTabs()
 	self:refreshTree()
+	-- flag structural problems on save (stay quiet when the buffer's clean)
+	local diags = Diagnostics.check(buf.source)
+	local shown = math.min(#diags, 5)
+	for i = 1, shown do
+		self:print(`L{diags[i].line}: {diags[i].message}`, "Warn")
+	end
+	if #diags > shown then
+		self:print(`... and {#diags - shown} more - :check for all`, "Warn")
+	end
 end
 
 function Kaveat:closeActive()
@@ -1109,6 +1127,59 @@ function Kaveat:run()
 	end
 	local ok, result = pcall(self.runner, buf.source, buf.context)
 	self:print(ok and ("ok: " .. tostring(result)) or ("error: " .. tostring(result)), ok and "Output" or "Error")
+end
+
+-- the editor's text selection, or nil when nothing is selected. Roblox sets SelectionStart
+-- to -1 with no selection; otherwise the selection spans [min, max) of cursor/selectionstart.
+function Kaveat:selectedText(): string?
+	local box = self.box
+	local sel = box.SelectionStart
+	local cur = box.CursorPosition
+	if sel == nil or sel < 0 or cur < 0 or sel == cur then
+		return nil
+	end
+	local a, b = math.min(sel, cur), math.max(sel, cur)
+	return string.sub(box.Text, a, b - 1)
+end
+
+-- run just the highlighted text, falling back to the whole buffer when nothing's selected
+function Kaveat:runSelection()
+	local buf = self.buffers[self.active]
+	if not buf then
+		return
+	end
+	local sel = self:selectedText()
+	if not sel or sel == "" then
+		return self:run()
+	end
+	if not self.runner then
+		self:print("run isnt wired yet (server loadstring pending)", "Warn")
+		return
+	end
+	local ok, result = pcall(self.runner, sel, buf.context)
+	self:print(ok and ("ok: " .. tostring(result)) or ("error: " .. tostring(result)), ok and "Output" or "Error")
+end
+
+-- structural check of the active buffer (heuristic). prints each issue and returns the count.
+function Kaveat:diagnose(): number
+	local buf = self.buffers[self.active]
+	if not buf then
+		return 0
+	end
+	local diags = Diagnostics.check(buf.source)
+	if #diags == 0 then
+		self:print("no issues", "Success")
+		return 0
+	end
+	local shown = math.min(#diags, 8)
+	for i = 1, shown do
+		local d = diags[i]
+		self:print(`L{d.line}: {d.message}`, d.severity == "error" and "Error" or "Warn")
+	end
+	if #diags > shown then
+		self:print(`... and {#diags - shown} more`, "Warn")
+	end
+	return #diags
 end
 
 -- drag / resize ------------------------------------------------------------

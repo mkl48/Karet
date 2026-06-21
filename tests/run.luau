@@ -19,6 +19,7 @@ local specs = {
 	{ name = "KaveatComplete", spec = require("./kaveatcomplete.spec") },
 	{ name = "Alias", spec = require("./alias.spec") },
 	{ name = "Search", spec = require("./search.spec") },
+	{ name = "Diagnostics", spec = require("./diagnostics.spec") },
 	{ name = "Extensions", spec = require("./extensions.spec") },
 }
 
