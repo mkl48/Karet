@@ -1,0 +1,136 @@
+/* Karet docs theme. matches the framework's default tokyonight palette and its terminal /
+ * dev-tool feel: JetBrains Mono for headings and code, Inter for body. loaded after Moonwave's
+ * base css, so these win. */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+
+/* ------------------------------------------------------------------ fonts */
+:root {
+  --ifm-font-family-base: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ifm-font-family-monospace: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --ifm-heading-font-family: "JetBrains Mono", ui-monospace, monospace;
+  --ifm-heading-font-weight: 600;
+  --ifm-font-weight-semibold: 600;
+  --ifm-code-font-size: 90%;
+  --ifm-line-height-base: 1.65;
+}
+
+/* the brand title in the navbar reads as a terminal prompt */
+.navbar__title {
+  font-family: var(--ifm-font-family-monospace);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.navbar__title::before {
+  content: "› ";
+  color: var(--ifm-color-primary);
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
+}
+
+/* --------------------------------------------------------- light (day) mode */
+:root {
+  --ifm-color-primary: #3b6fd6;
+  --ifm-color-primary-dark: #345fb8;
+  --ifm-color-primary-darker: #2f56a6;
+  --ifm-color-primary-darkest: #264788;
+  --ifm-color-primary-light: #5184e0;
+  --ifm-color-primary-lighter: #6a96e5;
+  --ifm-color-primary-lightest: #9bb9ee;
+
+  --ifm-background-color: #fafbff;
+  --ifm-background-surface-color: #ffffff;
+  --ifm-navbar-background-color: #ffffffcc;
+  --ifm-code-background: #eef1f8;
+  --ifm-color-emphasis-200: #e3e7f0;
+  --ifm-color-emphasis-300: #cfd6e6;
+  --ifm-toc-border-color: #e3e7f0;
+  --docusaurus-highlighted-code-line-bg: #e7ecf7;
+}
+
+/* ----------------------------------------------------- dark (tokyonight) mode */
+[data-theme="dark"] {
+  --ifm-color-primary: #7aa2f7;
+  --ifm-color-primary-dark: #6690f6;
+  --ifm-color-primary-darker: #5685f5;
+  --ifm-color-primary-darkest: #2f63e8;
+  --ifm-color-primary-light: #8eb0f8;
+  --ifm-color-primary-lighter: #a6c0fa;
+  --ifm-color-primary-lightest: #cfddfd;
+
+  --ifm-background-color: #1a1b26;        /* tokyonight bg */
+  --ifm-background-surface-color: #1f2030;
+  --ifm-navbar-background-color: #16161ecc;
+  --ifm-footer-background-color: #16161e;
+  --ifm-font-color-base: #c0caf5;         /* foreground */
+  --ifm-heading-color: #c0caf5;
+  --ifm-link-color: #7aa2f7;
+
+  --ifm-code-background: #24283b;          /* surface */
+  --ifm-pre-background: #16161e;
+  --docusaurus-highlighted-code-line-bg: #2a2e44;
+
+  --ifm-color-emphasis-100: #1f2030;
+  --ifm-color-emphasis-200: #2a2e42;       /* borders */
+  --ifm-color-emphasis-300: #3b4063;
+  --ifm-toc-border-color: #2a2e42;
+  --ifm-color-content-secondary: #565f89;  /* muted */
+  --ifm-blockquote-color: #9aa5ce;
+}
+
+/* a faint accent on the navbar + footer edges */
+.navbar {
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+}
+[data-theme="dark"] .footer {
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+}
+
+/* code blocks: rounded, bordered, mono */
+.theme-code-block,
+pre[class*="language-"] {
+  border-radius: 8px;
+}
+[data-theme="dark"] .theme-code-block {
+  border: 1px solid var(--ifm-color-emphasis-200);
+}
+
+/* inline code reads like a token, not a grey pill */
+code {
+  border-radius: 5px;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  padding: 0.1rem 0.35rem;
+}
+[data-theme="dark"] code {
+  color: #bb9af7; /* accentAlt */
+}
+
+/* links + sidebar active state lean on the accent */
+.menu__link--active,
+.menu__link--active:hover {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
+}
+.table-of-contents__link--active {
+  color: var(--ifm-color-primary);
+}
+
+/* the API "Function / Property / Type" tags + admonitions get a touch more contrast */
+[data-theme="dark"] .admonition {
+  background-color: #1f2030;
+  border-color: var(--ifm-color-emphasis-200);
+}
+
+/* the home feature cards */
+.hero {
+  --ifm-hero-background-color: var(--ifm-background-color);
+}
+.hero__title {
+  font-family: var(--ifm-font-family-monospace);
+  letter-spacing: -0.03em;
+}
