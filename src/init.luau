@@ -30,6 +30,7 @@ local WindowManager = require(script.WindowManager)
 local Alias = require(script.Alias)
 local Extensions = require(script.Extensions)
 local Admin = require(script.Admin)
+local ThemeEditor = require(script.Theme.Editor)
 
 -- ---------------------------------------------------------------------------
 -- public types (exported so editors autocomplete config + params)
@@ -850,8 +851,8 @@ local function startClient(options: StartConfig)
 	-- built-in panels (client only), so `panels` / `open` show something out of the box and
 	-- demonstrate the platform other tools register through.
 	Karet.RegisterPanel({
-		Name = "theme",
-		Description = "live theme switcher",
+		Name = "themes",
+		Description = "quick theme switcher",
 		Open = function(ctx)
 			local w = ctx.Window({ title = "themes" })
 			w:Label("pick a theme")
@@ -867,6 +868,8 @@ local function startClient(options: StartConfig)
 			end)
 		end,
 	})
+	-- the full live colour editor (open theme)
+	Karet.RegisterPanel(ThemeEditor.panel(Karet))
 
 	Karet.Active = terminal
 	Karet.Host = host

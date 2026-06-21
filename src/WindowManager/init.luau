@@ -237,6 +237,20 @@ function Window:Slider(label: string, min: number?, max: number?, default: numbe
 	}
 end
 
+-- a Color3 picker (Iris InputColor3). returns { get() -> Color3, set(c) }
+function Window:Color(label: string, default: Color3?): any
+	local state = iris.State(default or Color3.new(1, 1, 1))
+	table.insert(self.widgets, { kind = "color", label = label, state = state })
+	return {
+		get = function()
+			return state:get()
+		end,
+		set = function(v: Color3)
+			state:set(v)
+		end,
+	}
+end
+
 function Window:OnClose(fn: () -> ())
 	self.onClose = fn
 end
@@ -290,6 +304,8 @@ function Window:_render()
 				i.Checkbox({ w.label }, { isChecked = w.state })
 			elseif w.kind == "slider" then
 				i.SliderNum({ w.label, 1, w.min, w.max }, { number = w.state })
+			elseif w.kind == "color" then
+				i.InputColor3({ w.label }, { color = w.state })
 			end
 		end
 		i.End()

@@ -41,6 +41,9 @@ local NOOP_WINDOW = setmetatable({
 	Slider = function()
 		return NOOP_HANDLE
 	end,
+	Color = function()
+		return NOOP_HANDLE
+	end,
 }, { __index = function(self)
 	return function()
 		return self
