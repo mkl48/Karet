@@ -23,6 +23,7 @@ local Capture = require(script.Parent.Capture)
 local create = require(script.create)
 local Output = require(script.Output)
 local Input = require(script.Input)
+local Toaster = require(script.Toaster)
 local Indicators = require(script.Parent.Indicators)
 local Render = require(script.Parent.Render)
 local Defaults = require(script.Parent.Defaults)
@@ -47,6 +48,9 @@ export type Terminal = {
 	success: (self: Terminal, text: string) -> (),
 	indicator: (self: Terminal, opts: { [string]: any }?) -> any,
 	printRich: (self: Terminal, richText: string, group: string?) -> (),
+	toast: (self: Terminal, text: string, opts: { [string]: any }?) -> (),
+	printLink: (self: Terminal, text: string, onClick: () -> (), group: string?) -> (),
+	runLine: (self: Terminal, line: string) -> (),
 	ui: (self: Terminal) -> { [string]: any },
 	promptText: (self: Terminal, question: string) -> boolean,
 	promptWindow: (self: Terminal, question: string) -> boolean,
@@ -94,6 +98,9 @@ function Terminal.new(opts: { [string]: any }?)
 		self.placement = PLACEMENTS[options.Placement or "Window"] or PLACEMENTS.Window
 		self:buildWindow(options)
 	end
+
+	-- toast stack lives on the ScreenGui so notifications still show with the window closed
+	self.toaster = Toaster.new(self.gui)
 
 	-- Recolour everything now and whenever the theme changes.
 	self.unsubscribeTheme = Theme.OnChanged(function(palette)
@@ -536,6 +543,20 @@ function Terminal:ui(): { [string]: any }
 		Markup = function(rich: string, group: string?)
 			t:printRich(rich, group)
 		end,
+		-- a transient corner notification
+		Toast = function(text: string, opts: { [string]: any }?)
+			t:toast(text, opts)
+		end,
+		-- a clickable output line; onClick is any function
+		Link = function(text: string, onClick: () -> (), group: string?)
+			t:printLink(text, onClick, group)
+		end,
+		-- a clickable line that runs a command line in the shell when pressed
+		Command = function(text: string, line: string, group: string?)
+			t:printLink(text, function()
+				t:runLine(line)
+			end, group)
+		end,
 		Rule = printer(Render.rule),
 		Panel = printer(Render.panel),
 		Table = printer(Render.table),
@@ -596,7 +617,42 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 		self.output:applyTheme(palette)
 	end
 	self.input:applyTheme(palette)
+	if self.toaster then
+		self.toaster:applyTheme(palette)
+	end
 	self:colorPromptModal()
+end
+
+-- Pop a transient toast notification (works whether the window is open or closed).
+-- opts: { group, title, duration }. group keys into the theme like any output group.
+function Terminal:toast(text: string, opts: { [string]: any }?)
+	if self.toaster then
+		self.toaster:push(text, opts)
+	end
+end
+
+-- Echo + run a line as if it had been typed (used by clickable output). Full window only.
+function Terminal:runLine(line: string)
+	if self.compact then
+		if self.submitHandler then
+			self.submitHandler(line)
+		end
+		return
+	end
+	if self.output then
+		self.output:append(`› {line}`, "Comment")
+	end
+	if self.submitHandler then
+		self.submitHandler(line)
+	end
+end
+
+-- Print a clickable line. onClick runs when it's pressed; no-op on a compact bar.
+function Terminal:printLink(text: string, onClick: () -> (), group: string?)
+	if self.compact or not self.output then
+		return
+	end
+	self.output:appendAction(text, group or "Output", onClick)
 end
 
 -- Move the window to a named placement live (config editor uses this). Full window only.
@@ -785,6 +841,9 @@ function Terminal:destroy()
 	end
 	if self.output then
 		self.output:destroy()
+	end
+	if self.toaster then
+		self.toaster:destroy()
 	end
 	self.input:destroy()
 	self.gui:Destroy()

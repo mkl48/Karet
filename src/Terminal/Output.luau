@@ -112,6 +112,50 @@ function Output:appendRich(richText: string, group: string?)
 	table.insert(self.lines, { label = label, group = grp })
 end
 
+-- A clickable line: renders as a TextButton that calls onClick when pressed, with a subtle
+-- hover tint so it reads as interactive. RichText so it can carry colour/badges. Used by
+-- ctx.UI.Link / ctx.UI.Command (eg "click to stop this job").
+function Output:appendAction(text: string, group: string?, onClick: () -> ())
+	local grp = group or "Output"
+	local color = self.palette and self.palette[grp] or Color3.new(1, 1, 1)
+	local hover = self.palette and self.palette.Selection or Color3.fromRGB(60, 60, 80)
+
+	local button = create("TextButton", {
+		Name = "ActionLine",
+		AutoButtonColor = false,
+		BackgroundColor3 = hover,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Font = FONT,
+		TextSize = TEXT_SIZE,
+		TextColor3 = color,
+		Text = text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true,
+		RichText = true,
+		LayoutOrder = #self.lines + 1,
+		Children = { create("UICorner", { CornerRadius = UDim.new(0, 4) }) },
+		Parent = self.frame,
+	}) :: TextButton
+
+	button.MouseEnter:Connect(function()
+		button.BackgroundTransparency = 0.85
+	end)
+	button.MouseLeave:Connect(function()
+		button.BackgroundTransparency = 1
+	end)
+	button.MouseButton1Click:Connect(function()
+		local ok, err = pcall(onClick)
+		if not ok then
+			warn(`Karet: action line handler errored - {tostring(err)}`)
+		end
+	end)
+
+	table.insert(self.lines, { label = button, group = grp })
+end
+
 -- A line you can keep rewriting in place (RichText), used by indicators/progress bars.
 -- Returns a handle: handle:set(richText) updates it, handle:remove() deletes it.
 function Output:appendLive(group: string?)

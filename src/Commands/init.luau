@@ -910,6 +910,23 @@ function Commands.build(services: Services): { any }
 				ctx.Success(ctx.Args.text)
 			end },
 		},
+
+		{
+			Name = "toast",
+			Description = "pop a transient toast notification: toast \"saved\" --group=Success",
+			Network = "Client",
+			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			Modifiers = {
+				{ Name = "group", Types = { "String" }, Default = "Output", Description = "theme group (Success/Warn/Error/Info)" },
+				{ Name = "title", Types = { "String" }, Default = "karet", Description = "the toast's title line" },
+			},
+			On = { Client = function(ctx)
+				if ctx.UI.available ~= true then
+					return ctx.Info(ctx.Args.text)
+				end
+				ctx.UI.Toast(ctx.Args.text, { group = ctx.Modifiers.group, title = ctx.Modifiers.title })
+			end },
+		},
 	}
 
 	-- ---------------------------------------------------------------------------
@@ -1325,7 +1342,13 @@ function Commands.build(services: Services): { any }
 				if #list == 0 then
 					return ctx.Info("no running jobs")
 				end
-				if ctx.UI.available == true then
+				-- on the terminal each job is a clickable line (click to stop it)
+				if ctx.UI.available == true and ctx.UI.Command then
+					ctx.Info("running jobs (click to stop):")
+					for _, j in list do
+						ctx.UI.Command(`  ⏹ {j.id}  {j.label}`, `stop {j.id}`, "Warn")
+					end
+				elseif ctx.UI.available == true then
 					local rows = {}
 					for _, j in list do
 						table.insert(rows, { tostring(j.id), j.label })

@@ -87,6 +87,15 @@ local Defaults = {
 	Repeat = {
 		MaxTimes = 10000,
 	},
+
+	-- transient toast notifications (stack in the corner, auto dismiss)
+	Toast = {
+		Width = 280,
+		Duration = 4, -- seconds on screen before it fades
+		FadeTime = 0.25,
+		Max = 5, -- oldest gets evicted past this many
+		Gap = 6,
+	},
 }
 
 return Defaults

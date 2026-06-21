@@ -204,6 +204,14 @@ function Karet.Run(line: string): any
 	return Karet.Evaluator:run(parsed.ast)
 end
 
+-- Pop a transient toast notification on the active terminal. No-op on the server or before a
+-- terminal exists. opts: { group, title, duration }. Handy for extensions and admin events.
+function Karet.Toast(text: string, opts: { [string]: any }?)
+	if Karet.Active then
+		Karet.Active:toast(text, opts)
+	end
+end
+
 -- Server-side: is this player muted? (set by the `mute` command; nil before Admin setup.)
 function Karet.IsMuted(player: any): boolean
 	local backend = Karet._adminBackend

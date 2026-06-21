@@ -236,6 +236,14 @@ function Karet.Run(line: string): any
 	return Karet.Evaluator:run(parsed.ast)
 end
 
+-- Pop a transient toast notification on the active terminal. No-op on the server or before a
+-- terminal exists. opts: { group, title, duration }. Handy for extensions and admin events.
+function Karet.Toast(text: string, opts: { [string]: any }?)
+	if Karet.Active then
+		Karet.Active:toast(text, opts)
+	end
+end
+
 -- Server-side: is this player muted? (set by the `mute` command; nil before Admin setup.)
 function Karet.IsMuted(player: any): boolean
 	local backend = Karet._adminBackend
@@ -2488,6 +2496,23 @@ function Commands.build(services: Services): { any }
 				ctx.Success(ctx.Args.text)
 			end },
 		},
+
+		{
+			Name = "toast",
+			Description = "pop a transient toast notification: toast \"saved\" --group=Success",
+			Network = "Client",
+			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			Modifiers = {
+				{ Name = "group", Types = { "String" }, Default = "Output", Description = "theme group (Success/Warn/Error/Info)" },
+				{ Name = "title", Types = { "String" }, Default = "karet", Description = "the toast's title line" },
+			},
+			On = { Client = function(ctx)
+				if ctx.UI.available ~= true then
+					return ctx.Info(ctx.Args.text)
+				end
+				ctx.UI.Toast(ctx.Args.text, { group = ctx.Modifiers.group, title = ctx.Modifiers.title })
+			end },
+		},
 	}
 
 	-- ---------------------------------------------------------------------------
@@ -2903,7 +2928,13 @@ function Commands.build(services: Services): { any }
 				if #list == 0 then
 					return ctx.Info("no running jobs")
 				end
-				if ctx.UI.available == true then
+				-- on the terminal each job is a clickable line (click to stop it)
+				if ctx.UI.available == true and ctx.UI.Command then
+					ctx.Info("running jobs (click to stop):")
+					for _, j in list do
+						ctx.UI.Command(`  ⏹ {j.id}  {j.label}`, `stop {j.id}`, "Warn")
+					end
+				elseif ctx.UI.available == true then
 					local rows = {}
 					for _, j in list do
 						table.insert(rows, { tostring(j.id), j.label })
@@ -3606,6 +3637,15 @@ local Defaults = {
 	-- the repc repeat command
 	Repeat = {
 		MaxTimes = 10000,
+	},
+
+	-- transient toast notifications (stack in the corner, auto dismiss)
+	Toast = {
+		Width = 280,
+		Duration = 4, -- seconds on screen before it fades
+		FadeTime = 0.25,
+		Max = 5, -- oldest gets evicted past this many
+		Gap = 6,
 	},
 }
 
@@ -34715,6 +34755,7 @@ local Capture = require(script.Parent.Capture)
 local create = require(script.create)
 local Output = require(script.Output)
 local Input = require(script.Input)
+local Toaster = require(script.Toaster)
 local Indicators = require(script.Parent.Indicators)
 local Render = require(script.Parent.Render)
 local Defaults = require(script.Parent.Defaults)
@@ -34739,6 +34780,9 @@ export type Terminal = {
 	success: (self: Terminal, text: string) -> (),
 	indicator: (self: Terminal, opts: { [string]: any }?) -> any,
 	printRich: (self: Terminal, richText: string, group: string?) -> (),
+	toast: (self: Terminal, text: string, opts: { [string]: any }?) -> (),
+	printLink: (self: Terminal, text: string, onClick: () -> (), group: string?) -> (),
+	runLine: (self: Terminal, line: string) -> (),
 	ui: (self: Terminal) -> { [string]: any },
 	promptText: (self: Terminal, question: string) -> boolean,
 	promptWindow: (self: Terminal, question: string) -> boolean,
@@ -34786,6 +34830,9 @@ function Terminal.new(opts: { [string]: any }?)
 		self.placement = PLACEMENTS[options.Placement or "Window"] or PLACEMENTS.Window
 		self:buildWindow(options)
 	end
+
+	-- toast stack lives on the ScreenGui so notifications still show with the window closed
+	self.toaster = Toaster.new(self.gui)
 
 	-- Recolour everything now and whenever the theme changes.
 	self.unsubscribeTheme = Theme.OnChanged(function(palette)
@@ -35228,6 +35275,20 @@ function Terminal:ui(): { [string]: any }
 		Markup = function(rich: string, group: string?)
 			t:printRich(rich, group)
 		end,
+		-- a transient corner notification
+		Toast = function(text: string, opts: { [string]: any }?)
+			t:toast(text, opts)
+		end,
+		-- a clickable output line; onClick is any function
+		Link = function(text: string, onClick: () -> (), group: string?)
+			t:printLink(text, onClick, group)
+		end,
+		-- a clickable line that runs a command line in the shell when pressed
+		Command = function(text: string, line: string, group: string?)
+			t:printLink(text, function()
+				t:runLine(line)
+			end, group)
+		end,
 		Rule = printer(Render.rule),
 		Panel = printer(Render.panel),
 		Table = printer(Render.table),
@@ -35288,7 +35349,42 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 		self.output:applyTheme(palette)
 	end
 	self.input:applyTheme(palette)
+	if self.toaster then
+		self.toaster:applyTheme(palette)
+	end
 	self:colorPromptModal()
+end
+
+-- Pop a transient toast notification (works whether the window is open or closed).
+-- opts: { group, title, duration }. group keys into the theme like any output group.
+function Terminal:toast(text: string, opts: { [string]: any }?)
+	if self.toaster then
+		self.toaster:push(text, opts)
+	end
+end
+
+-- Echo + run a line as if it had been typed (used by clickable output). Full window only.
+function Terminal:runLine(line: string)
+	if self.compact then
+		if self.submitHandler then
+			self.submitHandler(line)
+		end
+		return
+	end
+	if self.output then
+		self.output:append(`› {line}`, "Comment")
+	end
+	if self.submitHandler then
+		self.submitHandler(line)
+	end
+end
+
+-- Print a clickable line. onClick runs when it's pressed; no-op on a compact bar.
+function Terminal:printLink(text: string, onClick: () -> (), group: string?)
+	if self.compact or not self.output then
+		return
+	end
+	self.output:appendAction(text, group or "Output", onClick)
 end
 
 -- Move the window to a named placement live (config editor uses this). Full window only.
@@ -35477,6 +35573,9 @@ function Terminal:destroy()
 	end
 	if self.output then
 		self.output:destroy()
+	end
+	if self.toaster then
+		self.toaster:destroy()
 	end
 	self.input:destroy()
 	self.gui:Destroy()
@@ -36250,6 +36349,50 @@ function Output:appendRich(richText: string, group: string?)
 	table.insert(self.lines, { label = label, group = grp })
 end
 
+-- A clickable line: renders as a TextButton that calls onClick when pressed, with a subtle
+-- hover tint so it reads as interactive. RichText so it can carry colour/badges. Used by
+-- ctx.UI.Link / ctx.UI.Command (eg "click to stop this job").
+function Output:appendAction(text: string, group: string?, onClick: () -> ())
+	local grp = group or "Output"
+	local color = self.palette and self.palette[grp] or Color3.new(1, 1, 1)
+	local hover = self.palette and self.palette.Selection or Color3.fromRGB(60, 60, 80)
+
+	local button = create("TextButton", {
+		Name = "ActionLine",
+		AutoButtonColor = false,
+		BackgroundColor3 = hover,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Font = FONT,
+		TextSize = TEXT_SIZE,
+		TextColor3 = color,
+		Text = text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true,
+		RichText = true,
+		LayoutOrder = #self.lines + 1,
+		Children = { create("UICorner", { CornerRadius = UDim.new(0, 4) }) },
+		Parent = self.frame,
+	}) :: TextButton
+
+	button.MouseEnter:Connect(function()
+		button.BackgroundTransparency = 0.85
+	end)
+	button.MouseLeave:Connect(function()
+		button.BackgroundTransparency = 1
+	end)
+	button.MouseButton1Click:Connect(function()
+		local ok, err = pcall(onClick)
+		if not ok then
+			warn(`Karet: action line handler errored - {tostring(err)}`)
+		end
+	end)
+
+	table.insert(self.lines, { label = button, group = grp })
+end
+
 -- A line you can keep rewriting in place (RichText), used by indicators/progress bars.
 -- Returns a handle: handle:set(richText) updates it, handle:remove() deletes it.
 function Output:appendLive(group: string?)
@@ -36400,6 +36543,191 @@ function Search.history(history: { string }, query: string, occurrence: number?)
 end
 
 return Search
+]])
+mod("Toaster", _33, [[
+-- transient toast notifications. a corner stack of little cards that fade in, sit for a few
+-- seconds, then fade out. lives on the ScreenGui (not the window) so toasts still show when
+-- the terminal is closed. themed by the same semantic groups as the output log.
+
+local TweenService = game:GetService("TweenService")
+
+local create = require(script.Parent.create)
+local Defaults = require(script.Parent.Parent.Defaults)
+
+local Toaster = {}
+Toaster.__index = Toaster
+
+local FONT = Defaults.Font
+local CFG = Defaults.Toast
+
+function Toaster.new(parent: Instance)
+	local self = setmetatable({}, Toaster)
+	self.palette = nil :: any
+	self.cards = {} :: { any }
+
+	-- top-right column. AutomaticSize grows it to fit the stack; high ZIndex floats it over
+	-- the window and anything else Karet draws.
+	local container = create("Frame", {
+		Name = "KaretToasts",
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -12, 0, 12),
+		Size = UDim2.fromOffset(CFG.Width, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		ZIndex = 200,
+		Children = {
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				HorizontalAlignment = Enum.HorizontalAlignment.Right,
+				Padding = UDim.new(0, CFG.Gap),
+			}),
+		},
+		Parent = parent,
+	})
+	self.container = container
+	return self
+end
+
+function Toaster:applyTheme(palette: { [string]: Color3 })
+	self.palette = palette
+	for _, card in self.cards do
+		self:colorCard(card)
+	end
+end
+
+function Toaster:colorCard(card: any)
+	local p = self.palette
+	if not p then
+		return
+	end
+	card.frame.BackgroundColor3 = p.Surface
+	card.stroke.Color = p[card.group] or p.Border
+	card.accent.BackgroundColor3 = p[card.group] or p.Accent
+	card.title.TextColor3 = p[card.group] or p.Accent
+	card.body.TextColor3 = p.Foreground
+end
+
+-- opts: { group = "Output"|"Error"|..., title = string?, duration = number? }
+function Toaster:push(text: string, opts: { [string]: any }?)
+	opts = opts or {}
+	local group = opts.group or "Output"
+	local nextOrder = (self._order or 0) + 1
+	self._order = nextOrder
+
+	local stroke = create("UIStroke", { Thickness = 1, Transparency = 1 })
+	-- a coloured spine down the left edge, group-tinted
+	local accent = create("Frame", {
+		Name = "Accent",
+		BorderSizePixel = 0,
+		Size = UDim2.new(0, 3, 1, 0),
+		BackgroundTransparency = 1,
+	})
+	local title = create("TextLabel", {
+		Name = "Title",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -20, 0, 16),
+		Position = UDim2.new(0, 12, 0, 8),
+		Font = FONT,
+		TextSize = 13,
+		Text = opts.title or "karet",
+		TextTransparency = 1,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+	}) :: TextLabel
+	local body = create("TextLabel", {
+		Name = "Body",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -20, 0, 0),
+		Position = UDim2.new(0, 12, 0, 26),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Font = FONT,
+		TextSize = 14,
+		Text = text,
+		TextTransparency = 1,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+	}) :: TextLabel
+
+	local frame = create("Frame", {
+		Name = "Toast",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BorderSizePixel = 0,
+		LayoutOrder = nextOrder,
+		ZIndex = 200,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			create("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 10) }),
+			stroke,
+			accent,
+			title,
+			body,
+		},
+		Parent = self.container,
+	})
+
+	local card = { frame = frame, stroke = stroke, accent = accent, title = title, body = body, group = group }
+	self:colorCard(card)
+	table.insert(self.cards, card)
+
+	-- evict the oldest if we've stacked too many
+	while #self.cards > CFG.Max do
+		self:dismiss(self.cards[1])
+	end
+
+	-- fade in
+	local info = TweenInfo.new(CFG.FadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	frame.BackgroundTransparency = 1
+	TweenService:Create(frame, info, { BackgroundTransparency = 0 }):Play()
+	TweenService:Create(stroke, info, { Transparency = 0 }):Play()
+	TweenService:Create(title, info, { TextTransparency = 0 }):Play()
+	TweenService:Create(body, info, { TextTransparency = 0 }):Play()
+	TweenService:Create(accent, info, { BackgroundTransparency = 0 }):Play()
+
+	-- auto dismiss after its time, unless someone already removed it
+	local duration = opts.duration or CFG.Duration
+	task.delay(duration, function()
+		if card.frame and card.frame.Parent then
+			self:dismiss(card)
+		end
+	end)
+
+	return card
+end
+
+function Toaster:dismiss(card: any)
+	local i = table.find(self.cards, card)
+	if i then
+		table.remove(self.cards, i)
+	end
+	local frame = card.frame
+	if not (frame and frame.Parent) then
+		return
+	end
+	local info = TweenInfo.new(CFG.FadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	TweenService:Create(frame, info, { BackgroundTransparency = 1 }):Play()
+	TweenService:Create(card.stroke, info, { Transparency = 1 }):Play()
+	TweenService:Create(card.title, info, { TextTransparency = 1 }):Play()
+	TweenService:Create(card.body, info, { TextTransparency = 1 }):Play()
+	TweenService:Create(card.accent, info, { BackgroundTransparency = 1 }):Play()
+	task.delay(CFG.FadeTime, function()
+		if frame then
+			frame:Destroy()
+		end
+	end)
+end
+
+function Toaster:destroy()
+	if self.container then
+		self.container:Destroy()
+	end
+	table.clear(self.cards)
+end
+
+return Toaster
 ]])
 mod("create", _33, [[
 -- Tiny declarative Instance builder for the terminal UI.
@@ -37596,5 +37924,5 @@ end
 return deps
 ]])
 
-print("[Karet] installed 107 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 108 modules under ReplicatedStorage.Karet")
 return true
