@@ -25,6 +25,8 @@ local ATOM = "KaretCommandRequest"
 local CHANNEL = "KaretCommand"
 local KAVEAT_ATOM = "KaretKaveatRun"
 local KAVEAT_CHANNEL = "KaretKaveat"
+local PROFILE_ATOM = "KaretProfileSync"
+local PROFILE_CHANNEL = "KaretProfile"
 
 export type Request = {
 	name: string, -- command name
@@ -81,6 +83,22 @@ function Networking.new()
 			self.kaveatAtom = kav
 		else
 			warn(`Karet.Networking: failed to define kaveat channel - {kav}`)
+		end
+
+		-- profile persistence sync (load/save the player's saved Karet profile)
+		local ok3, prof = pcall(function()
+			local Type = self.substance.Type
+			local atom = self.substance.Define(PROFILE_ATOM, {
+				action = Type.string(),
+				data = Type.any():nullable(),
+			})
+			atom:Compose(PROFILE_CHANNEL, "Solve")
+			return atom
+		end)
+		if ok3 then
+			self.profileAtom = prof
+		else
+			warn(`Karet.Networking: failed to define profile channel - {prof}`)
 		end
 	end
 
@@ -140,6 +158,38 @@ function Networking:invokeKaveat(source: string, context: string?): any
 		return { ok = false, error = "malformed server response" }
 	end
 	return result
+end
+
+-- CLIENT: load/save the player's persisted profile. payload = { action = "load"|"save", data? }.
+function Networking:syncProfile(payload: any): any
+	if not self.profileAtom then
+		return { ok = false, error = "profile sync unavailable (Substance not installed?)" }
+	end
+	local ok, result = pcall(function()
+		return self.profileAtom:Post(payload):Await()
+	end)
+	if not ok then
+		return { ok = false, error = `network error: {result}` }
+	end
+	if type(result) ~= "table" then
+		return { ok = false, error = "malformed server response" }
+	end
+	return result
+end
+
+-- SERVER: handle profile load/save. runner(payload, player) -> result.
+function Networking:listenProfile(runner: (any, any) -> any)
+	if not self.profileAtom then
+		warn("Karet.Networking: cannot listen for profile sync - Substance unavailable")
+		return
+	end
+	self.profileAtom:Subscribe(function(payload: any, player: any): any
+		local ok, result = pcall(runner, payload, player)
+		if not ok then
+			return { ok = false, error = tostring(result) }
+		end
+		return result
+	end)
 end
 
 -- SERVER: handle incoming kaveat run requests. runner(payload, player) -> result.

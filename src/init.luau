@@ -58,6 +58,7 @@ export type StartConfig = {
 	Position: UDim2?, -- override the window position
 	Kaveat: boolean?, -- enable the Kaveat editor
 	PromptType: ("text" | "window")?, -- how Dangerous commands confirm: terminal y/N or an Iris modal
+	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases) via Pik DataStores
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	DefaultRole: string?, -- server: default role for players
 	RateLimit: RateLimit?, -- server: rate limiting (reserved)
@@ -623,6 +624,58 @@ local function startClient(options: StartConfig)
 		end
 	end
 
+	-- profile persistence (client side). load the saved shell state on join, then push saves
+	-- on an interval. fields are filled IN PLACE so existing references (input.history bound to
+	-- Profile.History, the evaluator's @env scope, the kav store) keep pointing at live data.
+	if options.Persist then
+		local function fillArray(dst, src)
+			if type(src) == "table" then
+				table.clear(dst)
+				for _, v in src do
+					table.insert(dst, v)
+				end
+			end
+		end
+		local function fillMap(dst, src)
+			if type(src) == "table" then
+				table.clear(dst)
+				for k, v in src do
+					dst[k] = v
+				end
+			end
+		end
+		task.spawn(function()
+			local res = networking:syncProfile({ action = "load" })
+			if res and res.ok and res.data then
+				local d = res.data
+				fillArray(Karet.Profile.History, d.History)
+				fillMap(Karet.Profile.Kavs, d.Kavs)
+				fillMap(Karet.Profile.Aliases, d.Aliases)
+				if type(d.Vars) == "table" then
+					for k, v in d.Vars do
+						Karet.Env[k] = v
+					end
+				end
+				if type(d.Theme) == "string" and d.Theme ~= "" then
+					pcall(Karet.Theme.Set, d.Theme)
+					Karet.Profile.CurrentTheme = d.Theme
+				end
+			end
+		end)
+		task.spawn(function()
+			while true do
+				task.wait(60)
+				networking:syncProfile({ action = "save", data = {
+					History = Karet.Profile.History,
+					Kavs = Karet.Profile.Kavs,
+					Aliases = Karet.Profile.Aliases,
+					Vars = Karet.Env,
+					Theme = Karet.Theme.Name() or Karet.Profile.CurrentTheme,
+				} })
+			end
+		end)
+	end
+
 	Karet.Active = terminal
 	Karet.Host = host
 	Karet.Evaluator = evaluator
@@ -651,6 +704,58 @@ local function startServer(options: StartConfig)
 	networking:listen(function(request, player)
 		return host.runServerRequest(request, player)
 	end)
+
+	-- profile persistence (server side). Pik is required lazily so the DataStore-touching
+	-- ProfileStore never loads unless persistence is actually on. one KaretProfile schema
+	-- holds the saved shell state; the client loads it on join and pushes saves periodically.
+	if options.Persist then
+		local ok, Pik = pcall(require, script.Pik)
+		if ok and Pik then
+			Pik.Configure({ AutoSave = true, AutoSaveInterval = 120, Reconcile = true, LogLevel = "Warn" })
+			Pik.SetSchema("KaretProfile", {
+				History = {},
+				Vars = {},
+				Kavs = {},
+				Theme = "",
+				Aliases = {},
+			})
+			Players.PlayerAdded:Connect(function(player)
+				Pik.StartPlayerSession(player).catch(function(err)
+					warn(`karet: profile session failed for {player.Name} - {tostring(err)}`)
+				end)
+			end)
+			for _, player in Players:GetPlayers() do
+				Pik.StartPlayerSession(player)
+			end
+			-- the saved fields the client is allowed to read/write
+			local FIELDS = { "History", "Vars", "Kavs", "Theme", "Aliases" }
+			networking:listenProfile(function(payload, player)
+				local stores = Pik.WaitForSession(player)
+				local handle = stores and stores.KaretProfile
+				if not handle then
+					return { ok = false, error = "no profile session" }
+				end
+				if payload.action == "load" then
+					local data = {}
+					for _, f in FIELDS do
+						data[f] = handle:Get(f)
+					end
+					return { ok = true, data = data }
+				elseif payload.action == "save" then
+					local incoming = payload.data or {}
+					for _, f in FIELDS do
+						if incoming[f] ~= nil then
+							handle:Set(f, incoming[f])
+						end
+					end
+					return { ok = true }
+				end
+				return { ok = false, error = "unknown profile action" }
+			end)
+		else
+			warn("karet: Persist is on but Pik failed to load - " .. tostring(Pik))
+		end
+	end
 
 	-- kaveat runs code with loadstring (server only). gated for safety: studio is always
 	-- allowed, otherwise Start{ KaveatExec = true } or KaveatExec = function(player) ... end.
