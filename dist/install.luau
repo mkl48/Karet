@@ -501,6 +501,85 @@ local function startClient(options: StartConfig)
 		return Karet.Evaluator:run(parsed.ast)
 	end
 
+	-- Live HUD watches (the `pin` command). Each watch evaluates an expression on an interval
+	-- and pushes the value (with a sparkline for numbers) onto a row in the corner overlay.
+	-- Like the jobs registry, this owns the loops so the commands stay thin.
+	local function escMarkup(s: string): string
+		return (string.gsub(string.gsub(string.gsub(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"))
+	end
+	local function fmtNum(n: number): string
+		if n == math.floor(n) and math.abs(n) < 1e15 then
+			return tostring(math.floor(n))
+		end
+		return string.format("%.2f", n)
+	end
+	local hudList: { [number]: { id: number, expr: string, label: string, cancel: () -> () } } = {}
+	local nextHudId = 0
+	local hudWatches = {
+		add = function(expr: string, label: string?, interval: number?): number
+			nextHudId += 1
+			local id = nextHudId
+			local name = (label and label ~= "") and label or expr
+			local row = terminal:hudRow()
+			local running = true
+			hudList[id] = { id = id, expr = expr, label = name, cancel = function()
+				running = false
+			end }
+			local period = math.max(0.1, interval or 0.5)
+			task.spawn(function()
+				local history: { number } = {}
+				while running do
+					local r = runLine(expr)
+					local value: any = (type(r) == "table" and r.returns) and r.returns[1] or nil
+					local head = `{escMarkup(name)}: `
+					if type(value) == "number" then
+						table.insert(history, value)
+						while #history > 24 do
+							table.remove(history, 1)
+						end
+						row.set(`{head}{fmtNum(value)} {Render.sparkline(history)}`)
+					elseif value == nil then
+						row.set(`{head}<i>nil</i>`)
+					else
+						row.set(`{head}{escMarkup(tostring(value))}`)
+					end
+					local t = 0
+					while running and t < period do
+						t += task.wait()
+					end
+				end
+				row.remove()
+				hudList[id] = nil
+			end)
+			return id
+		end,
+		remove = function(id: number): boolean
+			local w = hudList[id]
+			if not w then
+				return false
+			end
+			pcall(w.cancel)
+			hudList[id] = nil
+			return true
+		end,
+		clear = function()
+			for id, w in hudList do
+				pcall(w.cancel)
+				hudList[id] = nil
+			end
+		end,
+		list = function()
+			local out = {}
+			for _, w in hudList do
+				table.insert(out, w)
+			end
+			table.sort(out, function(a, b)
+				return a.id < b.id
+			end)
+			return out
+		end,
+	}
+
 	-- Built-in commands (help/clear/echo/theme/...), unless opted out.
 	if options.BuiltIns ~= false then
 		local services = {
@@ -561,6 +640,7 @@ local function startClient(options: StartConfig)
 			end,
 			defaults = Karet.Defaults,
 			jobs = jobs,
+			hud = hudWatches,
 			logCapture = logCapture,
 			panels = {
 				list = function()
@@ -753,12 +833,12 @@ local function startClient(options: StartConfig)
 		local function serializeConfig(): string
 			return table.concat({
 				"# karet @CONFIG  -  edit values then :w to apply",
-				"# format:  key = value   (# starts a comment)",
+				"# format:  Key = value   (# starts a comment)",
 				"",
-				"theme     = " .. (Karet.Theme.Name() or "tokyonight"),
-				"prompt    = " .. cfg.promptType .. "        # text | window",
-				"placement = " .. cfg.placement .. "        # Window | Top | Bottom",
-				"toggle    = " .. tostring(cfg.toggle or "Semicolon"),
+				"Theme     = " .. (Karet.Theme.Name() or "tokyonight"),
+				"Prompt    = " .. cfg.promptType .. "        # text | window",
+				"Placement = " .. cfg.placement .. "        # Window | Top | Bottom",
+				"Toggle    = " .. tostring(cfg.toggle or "Semicolon"),
 			}, "\n")
 		end
 		local function applyConfig(src: string): { string }
@@ -767,7 +847,7 @@ local function startClient(options: StartConfig)
 			if kv.theme and kv.theme ~= "" and kv.theme ~= Karet.Theme.Name() then
 				if pcall(Karet.Theme.Set, kv.theme) then
 					Karet.Profile.CurrentTheme = kv.theme
-					table.insert(out, "theme -> " .. kv.theme)
+					table.insert(out, "Theme -> " .. kv.theme)
 				else
 					table.insert(out, "! unknown theme '" .. kv.theme .. "'")
 				end
@@ -775,22 +855,22 @@ local function startClient(options: StartConfig)
 			if kv.prompt == "text" or kv.prompt == "window" then
 				if kv.prompt ~= cfg.promptType then
 					cfg.promptType = kv.prompt
-					table.insert(out, "prompt -> " .. kv.prompt)
+					table.insert(out, "Prompt -> " .. kv.prompt)
 				end
 			elseif kv.prompt then
-				table.insert(out, "! prompt must be text | window")
+				table.insert(out, "! Prompt must be text | window")
 			end
 			if kv.placement and kv.placement ~= cfg.placement then
 				if terminal:setPlacement(kv.placement) then
 					cfg.placement = kv.placement
-					table.insert(out, "placement -> " .. kv.placement)
+					table.insert(out, "Placement -> " .. kv.placement)
 				else
 					table.insert(out, "! bad placement '" .. kv.placement .. "'")
 				end
 			end
 			if kv.toggle and kv.toggle ~= "" and kv.toggle ~= tostring(cfg.toggle) then
 				cfg.toggle = kv.toggle
-				table.insert(out, "toggle -> " .. kv.toggle .. " (restart to apply)")
+				table.insert(out, "Toggle -> " .. kv.toggle .. " (restart to apply)")
 			end
 			if #out == 0 then
 				table.insert(out, "nothing changed")
@@ -1629,6 +1709,12 @@ export type Services = {
 	}?,
 	extensions: (() -> { any })?,
 	jobs: { [string]: any }?,
+	hud: {
+		add: (expr: string, label: string?, interval: number?) -> number,
+		remove: (id: number) -> boolean,
+		clear: () -> (),
+		list: () -> { any },
+	}?,
 	logCapture: { [string]: any }?,
 	aliases: {
 		get: (name: string) -> any,
@@ -2966,6 +3052,70 @@ function Commands.build(services: Services): { any }
 					ctx.Success(`stopped job {id}`)
 				else
 					ctx.Warn(`no job {ctx.Args.id}`)
+				end
+			end },
+		})
+	end
+
+	-- live HUD watches ---------------------------------------------------------
+	if services.hud then
+		local hud = services.hud
+		add({
+			Name = "pin",
+			Aliases = { "hud" },
+			Description = 'pin a value to the on-screen HUD: pin health  /  pin (@hp) hp --interval=1',
+			Network = "Client",
+			Args = {
+				{ Name = "expr", Types = { "String" }, Required = true },
+				{ Name = "label", Types = { "String" }, Required = false },
+			},
+			Modifiers = {
+				{ Name = "interval", Types = { "Number" }, Default = 0.5, Description = "seconds between samples" },
+			},
+			On = { Client = function(ctx)
+				local id = hud.add(ctx.Args.expr, ctx.Args.label, ctx.Modifiers.interval)
+				ctx.Success(`pinned #{id}: {ctx.Args.label or ctx.Args.expr}`)
+				ctx.Return(id)
+			end },
+		})
+		add({
+			Name = "unpin",
+			Aliases = { "unhud" },
+			Description = "remove a HUD watch by id, or `unpin all`",
+			Network = "Client",
+			Args = { { Name = "id", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				if string.lower(ctx.Args.id) == "all" then
+					hud.clear()
+					return ctx.Success("cleared the HUD")
+				end
+				local id = tonumber(ctx.Args.id)
+				if id and hud.remove(id) then
+					ctx.Success(`unpinned #{id}`)
+				else
+					ctx.Warn(`no HUD watch {ctx.Args.id}`)
+				end
+			end },
+		})
+		add({
+			Name = "pins",
+			Aliases = { "huds" },
+			Description = "list the pinned HUD watches",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local list = hud.list()
+				if #list == 0 then
+					return ctx.Info("nothing pinned (try: pin health)")
+				end
+				if ctx.UI.available == true and ctx.UI.Command then
+					ctx.Info("pinned watches (click to unpin):")
+					for _, w in list do
+						ctx.UI.Command(`  ✕ #{w.id}  {w.label}  ({w.expr})`, `unpin {w.id}`, "Warn")
+					end
+				else
+					for _, w in list do
+						ctx.Print(`#{w.id}  {w.label}  ({w.expr})`)
+					end
 				end
 			end },
 		})
@@ -34762,6 +34912,7 @@ local create = require(script.create)
 local Output = require(script.Output)
 local Input = require(script.Input)
 local Toaster = require(script.Toaster)
+local Hud = require(script.Hud)
 local Indicators = require(script.Parent.Indicators)
 local Render = require(script.Parent.Render)
 local Defaults = require(script.Parent.Defaults)
@@ -34787,6 +34938,7 @@ export type Terminal = {
 	indicator: (self: Terminal, opts: { [string]: any }?) -> any,
 	printRich: (self: Terminal, richText: string, group: string?) -> (),
 	toast: (self: Terminal, text: string, opts: { [string]: any }?) -> (),
+	hudRow: (self: Terminal) -> any,
 	printLink: (self: Terminal, text: string, onClick: () -> (), group: string?) -> (),
 	runLine: (self: Terminal, line: string) -> (),
 	ui: (self: Terminal) -> { [string]: any },
@@ -34837,8 +34989,9 @@ function Terminal.new(opts: { [string]: any }?)
 		self:buildWindow(options)
 	end
 
-	-- toast stack lives on the ScreenGui so notifications still show with the window closed
+	-- toast stack + live HUD both live on the ScreenGui so they show with the window closed
 	self.toaster = Toaster.new(self.gui)
+	self.hud = Hud.new(self.gui)
 
 	-- Recolour everything now and whenever the theme changes.
 	self.unsubscribeTheme = Theme.OnChanged(function(palette)
@@ -35358,6 +35511,9 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 	if self.toaster then
 		self.toaster:applyTheme(palette)
 	end
+	if self.hud then
+		self.hud:applyTheme(palette)
+	end
 	self:colorPromptModal()
 end
 
@@ -35367,6 +35523,15 @@ function Terminal:toast(text: string, opts: { [string]: any }?)
 	if self.toaster then
 		self.toaster:push(text, opts)
 	end
+end
+
+-- Add a row to the live HUD overlay, returning a handle { set(richText), remove() }. Used by
+-- the `pin` command to keep a watched expression on screen.
+function Terminal:hudRow(): any
+	if self.hud then
+		return self.hud:addRow()
+	end
+	return { set = function() end, remove = function() end }
 end
 
 -- Echo + run a line as if it had been typed (used by clickable output). Full window only.
@@ -35583,11 +35748,156 @@ function Terminal:destroy()
 	if self.toaster then
 		self.toaster:destroy()
 	end
+	if self.hud then
+		self.hud:destroy()
+	end
 	self.input:destroy()
 	self.gui:Destroy()
 end
 
 return Terminal
+]])
+mod("Hud", _33, [[
+-- the live HUD: a pinned, always-on overlay of watched expressions. each row shows a label,
+-- the current value, and a little sparkline of its recent history. lives on the ScreenGui so
+-- it stays visible with the terminal closed (that's the point - glance at @hp while you play).
+--
+-- this module is just the renderer. the polling (evaluate an expression on an interval and
+-- push the value in) is driven from the umbrella, where the shell `run` lives.
+
+local create = require(script.Parent.create)
+local Defaults = require(script.Parent.Parent.Defaults)
+
+local Hud = {}
+Hud.__index = Hud
+
+local FONT = Defaults.Font
+
+function Hud.new(parent: Instance)
+	local self = setmetatable({}, Hud)
+	self.palette = nil :: any
+	self.rows = {} :: { any }
+	self._order = 0
+
+	local title = create("TextLabel", {
+		Name = "Title",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -12, 0, 14),
+		Position = UDim2.new(0, 8, 0, 4),
+		Font = FONT,
+		TextSize = 11,
+		Text = "watches",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+	}) :: TextLabel
+
+	local list = create("Frame", {
+		Name = "Rows",
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 0, 0, 20),
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Children = {
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 2),
+			}),
+			create("UIPadding", {
+				PaddingLeft = UDim.new(0, 8),
+				PaddingRight = UDim.new(0, 8),
+				PaddingBottom = UDim.new(0, 6),
+			}),
+		},
+	})
+
+	local stroke = create("UIStroke", { Thickness = 1 })
+	local container = create("Frame", {
+		Name = "KaretHud",
+		Visible = false,
+		BackgroundTransparency = 0.15,
+		AnchorPoint = Vector2.new(0, 0),
+		Position = UDim2.new(0, 12, 0, 12),
+		Size = UDim2.fromOffset(220, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BorderSizePixel = 0,
+		ZIndex = 150,
+		Children = {
+			create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			stroke,
+			title,
+			list,
+		},
+		Parent = parent,
+	})
+
+	self.container = container
+	self.title = title
+	self.stroke = stroke
+	self.list = list
+	return self
+end
+
+function Hud:applyTheme(palette: { [string]: Color3 })
+	self.palette = palette
+	self.container.BackgroundColor3 = palette.Surface
+	self.stroke.Color = palette.Border
+	self.title.TextColor3 = palette.Muted
+	for _, row in self.rows do
+		row.label.TextColor3 = palette.Foreground
+	end
+end
+
+-- add a row, returns a handle: handle.set(richText) updates it, handle.remove() deletes it.
+-- the container shows itself when it has at least one row and hides when empty.
+function Hud:addRow(): any
+	self._order += 1
+	local label = create("TextLabel", {
+		Name = "Watch",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Font = FONT,
+		TextSize = 13,
+		RichText = true,
+		Text = "",
+		TextColor3 = self.palette and self.palette.Foreground or Color3.new(1, 1, 1),
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		LayoutOrder = self._order,
+		ZIndex = 151,
+		Parent = self.list,
+	}) :: TextLabel
+
+	local row = { label = label }
+	table.insert(self.rows, row)
+	self.container.Visible = true
+
+	local handle = {}
+	function handle.set(richText: string)
+		label.Text = richText
+	end
+	function handle.remove()
+		local i = table.find(self.rows, row)
+		if i then
+			table.remove(self.rows, i)
+		end
+		label:Destroy()
+		if #self.rows == 0 then
+			self.container.Visible = false
+		end
+	end
+	return handle
+end
+
+function Hud:destroy()
+	if self.container then
+		self.container:Destroy()
+	end
+	table.clear(self.rows)
+end
+
+return Hud
 ]])
 mod("Input", _33, [[
 -- the input row. a prompt + a real textbox, a coloured overlay behind it (so valid
@@ -38059,5 +38369,5 @@ end
 return deps
 ]])
 
-print("[Karet] installed 109 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 110 modules under ReplicatedStorage.Karet")
 return true

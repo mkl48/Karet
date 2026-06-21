@@ -24,6 +24,7 @@ local create = require(script.create)
 local Output = require(script.Output)
 local Input = require(script.Input)
 local Toaster = require(script.Toaster)
+local Hud = require(script.Hud)
 local Indicators = require(script.Parent.Indicators)
 local Render = require(script.Parent.Render)
 local Defaults = require(script.Parent.Defaults)
@@ -49,6 +50,7 @@ export type Terminal = {
 	indicator: (self: Terminal, opts: { [string]: any }?) -> any,
 	printRich: (self: Terminal, richText: string, group: string?) -> (),
 	toast: (self: Terminal, text: string, opts: { [string]: any }?) -> (),
+	hudRow: (self: Terminal) -> any,
 	printLink: (self: Terminal, text: string, onClick: () -> (), group: string?) -> (),
 	runLine: (self: Terminal, line: string) -> (),
 	ui: (self: Terminal) -> { [string]: any },
@@ -99,8 +101,9 @@ function Terminal.new(opts: { [string]: any }?)
 		self:buildWindow(options)
 	end
 
-	-- toast stack lives on the ScreenGui so notifications still show with the window closed
+	-- toast stack + live HUD both live on the ScreenGui so they show with the window closed
 	self.toaster = Toaster.new(self.gui)
+	self.hud = Hud.new(self.gui)
 
 	-- Recolour everything now and whenever the theme changes.
 	self.unsubscribeTheme = Theme.OnChanged(function(palette)
@@ -620,6 +623,9 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 	if self.toaster then
 		self.toaster:applyTheme(palette)
 	end
+	if self.hud then
+		self.hud:applyTheme(palette)
+	end
 	self:colorPromptModal()
 end
 
@@ -629,6 +635,15 @@ function Terminal:toast(text: string, opts: { [string]: any }?)
 	if self.toaster then
 		self.toaster:push(text, opts)
 	end
+end
+
+-- Add a row to the live HUD overlay, returning a handle { set(richText), remove() }. Used by
+-- the `pin` command to keep a watched expression on screen.
+function Terminal:hudRow(): any
+	if self.hud then
+		return self.hud:addRow()
+	end
+	return { set = function() end, remove = function() end }
 end
 
 -- Echo + run a line as if it had been typed (used by clickable output). Full window only.
@@ -844,6 +859,9 @@ function Terminal:destroy()
 	end
 	if self.toaster then
 		self.toaster:destroy()
+	end
+	if self.hud then
+		self.hud:destroy()
 	end
 	self.input:destroy()
 	self.gui:Destroy()

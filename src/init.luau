@@ -469,6 +469,85 @@ local function startClient(options: StartConfig)
 		return Karet.Evaluator:run(parsed.ast)
 	end
 
+	-- Live HUD watches (the `pin` command). Each watch evaluates an expression on an interval
+	-- and pushes the value (with a sparkline for numbers) onto a row in the corner overlay.
+	-- Like the jobs registry, this owns the loops so the commands stay thin.
+	local function escMarkup(s: string): string
+		return (string.gsub(string.gsub(string.gsub(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"))
+	end
+	local function fmtNum(n: number): string
+		if n == math.floor(n) and math.abs(n) < 1e15 then
+			return tostring(math.floor(n))
+		end
+		return string.format("%.2f", n)
+	end
+	local hudList: { [number]: { id: number, expr: string, label: string, cancel: () -> () } } = {}
+	local nextHudId = 0
+	local hudWatches = {
+		add = function(expr: string, label: string?, interval: number?): number
+			nextHudId += 1
+			local id = nextHudId
+			local name = (label and label ~= "") and label or expr
+			local row = terminal:hudRow()
+			local running = true
+			hudList[id] = { id = id, expr = expr, label = name, cancel = function()
+				running = false
+			end }
+			local period = math.max(0.1, interval or 0.5)
+			task.spawn(function()
+				local history: { number } = {}
+				while running do
+					local r = runLine(expr)
+					local value: any = (type(r) == "table" and r.returns) and r.returns[1] or nil
+					local head = `{escMarkup(name)}: `
+					if type(value) == "number" then
+						table.insert(history, value)
+						while #history > 24 do
+							table.remove(history, 1)
+						end
+						row.set(`{head}{fmtNum(value)} {Render.sparkline(history)}`)
+					elseif value == nil then
+						row.set(`{head}<i>nil</i>`)
+					else
+						row.set(`{head}{escMarkup(tostring(value))}`)
+					end
+					local t = 0
+					while running and t < period do
+						t += task.wait()
+					end
+				end
+				row.remove()
+				hudList[id] = nil
+			end)
+			return id
+		end,
+		remove = function(id: number): boolean
+			local w = hudList[id]
+			if not w then
+				return false
+			end
+			pcall(w.cancel)
+			hudList[id] = nil
+			return true
+		end,
+		clear = function()
+			for id, w in hudList do
+				pcall(w.cancel)
+				hudList[id] = nil
+			end
+		end,
+		list = function()
+			local out = {}
+			for _, w in hudList do
+				table.insert(out, w)
+			end
+			table.sort(out, function(a, b)
+				return a.id < b.id
+			end)
+			return out
+		end,
+	}
+
 	-- Built-in commands (help/clear/echo/theme/...), unless opted out.
 	if options.BuiltIns ~= false then
 		local services = {
@@ -529,6 +608,7 @@ local function startClient(options: StartConfig)
 			end,
 			defaults = Karet.Defaults,
 			jobs = jobs,
+			hud = hudWatches,
 			logCapture = logCapture,
 			panels = {
 				list = function()
@@ -721,12 +801,12 @@ local function startClient(options: StartConfig)
 		local function serializeConfig(): string
 			return table.concat({
 				"# karet @CONFIG  -  edit values then :w to apply",
-				"# format:  key = value   (# starts a comment)",
+				"# format:  Key = value   (# starts a comment)",
 				"",
-				"theme     = " .. (Karet.Theme.Name() or "tokyonight"),
-				"prompt    = " .. cfg.promptType .. "        # text | window",
-				"placement = " .. cfg.placement .. "        # Window | Top | Bottom",
-				"toggle    = " .. tostring(cfg.toggle or "Semicolon"),
+				"Theme     = " .. (Karet.Theme.Name() or "tokyonight"),
+				"Prompt    = " .. cfg.promptType .. "        # text | window",
+				"Placement = " .. cfg.placement .. "        # Window | Top | Bottom",
+				"Toggle    = " .. tostring(cfg.toggle or "Semicolon"),
 			}, "\n")
 		end
 		local function applyConfig(src: string): { string }
@@ -735,7 +815,7 @@ local function startClient(options: StartConfig)
 			if kv.theme and kv.theme ~= "" and kv.theme ~= Karet.Theme.Name() then
 				if pcall(Karet.Theme.Set, kv.theme) then
 					Karet.Profile.CurrentTheme = kv.theme
-					table.insert(out, "theme -> " .. kv.theme)
+					table.insert(out, "Theme -> " .. kv.theme)
 				else
 					table.insert(out, "! unknown theme '" .. kv.theme .. "'")
 				end
@@ -743,22 +823,22 @@ local function startClient(options: StartConfig)
 			if kv.prompt == "text" or kv.prompt == "window" then
 				if kv.prompt ~= cfg.promptType then
 					cfg.promptType = kv.prompt
-					table.insert(out, "prompt -> " .. kv.prompt)
+					table.insert(out, "Prompt -> " .. kv.prompt)
 				end
 			elseif kv.prompt then
-				table.insert(out, "! prompt must be text | window")
+				table.insert(out, "! Prompt must be text | window")
 			end
 			if kv.placement and kv.placement ~= cfg.placement then
 				if terminal:setPlacement(kv.placement) then
 					cfg.placement = kv.placement
-					table.insert(out, "placement -> " .. kv.placement)
+					table.insert(out, "Placement -> " .. kv.placement)
 				else
 					table.insert(out, "! bad placement '" .. kv.placement .. "'")
 				end
 			end
 			if kv.toggle and kv.toggle ~= "" and kv.toggle ~= tostring(cfg.toggle) then
 				cfg.toggle = kv.toggle
-				table.insert(out, "toggle -> " .. kv.toggle .. " (restart to apply)")
+				table.insert(out, "Toggle -> " .. kv.toggle .. " (restart to apply)")
 			end
 			if #out == 0 then
 				table.insert(out, "nothing changed")

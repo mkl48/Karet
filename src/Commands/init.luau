@@ -40,6 +40,12 @@ export type Services = {
 	}?,
 	extensions: (() -> { any })?,
 	jobs: { [string]: any }?,
+	hud: {
+		add: (expr: string, label: string?, interval: number?) -> number,
+		remove: (id: number) -> boolean,
+		clear: () -> (),
+		list: () -> { any },
+	}?,
 	logCapture: { [string]: any }?,
 	aliases: {
 		get: (name: string) -> any,
@@ -1377,6 +1383,70 @@ function Commands.build(services: Services): { any }
 					ctx.Success(`stopped job {id}`)
 				else
 					ctx.Warn(`no job {ctx.Args.id}`)
+				end
+			end },
+		})
+	end
+
+	-- live HUD watches ---------------------------------------------------------
+	if services.hud then
+		local hud = services.hud
+		add({
+			Name = "pin",
+			Aliases = { "hud" },
+			Description = 'pin a value to the on-screen HUD: pin health  /  pin (@hp) hp --interval=1',
+			Network = "Client",
+			Args = {
+				{ Name = "expr", Types = { "String" }, Required = true },
+				{ Name = "label", Types = { "String" }, Required = false },
+			},
+			Modifiers = {
+				{ Name = "interval", Types = { "Number" }, Default = 0.5, Description = "seconds between samples" },
+			},
+			On = { Client = function(ctx)
+				local id = hud.add(ctx.Args.expr, ctx.Args.label, ctx.Modifiers.interval)
+				ctx.Success(`pinned #{id}: {ctx.Args.label or ctx.Args.expr}`)
+				ctx.Return(id)
+			end },
+		})
+		add({
+			Name = "unpin",
+			Aliases = { "unhud" },
+			Description = "remove a HUD watch by id, or `unpin all`",
+			Network = "Client",
+			Args = { { Name = "id", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				if string.lower(ctx.Args.id) == "all" then
+					hud.clear()
+					return ctx.Success("cleared the HUD")
+				end
+				local id = tonumber(ctx.Args.id)
+				if id and hud.remove(id) then
+					ctx.Success(`unpinned #{id}`)
+				else
+					ctx.Warn(`no HUD watch {ctx.Args.id}`)
+				end
+			end },
+		})
+		add({
+			Name = "pins",
+			Aliases = { "huds" },
+			Description = "list the pinned HUD watches",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local list = hud.list()
+				if #list == 0 then
+					return ctx.Info("nothing pinned (try: pin health)")
+				end
+				if ctx.UI.available == true and ctx.UI.Command then
+					ctx.Info("pinned watches (click to unpin):")
+					for _, w in list do
+						ctx.UI.Command(`  ✕ #{w.id}  {w.label}  ({w.expr})`, `unpin {w.id}`, "Warn")
+					end
+				else
+					for _, w in list do
+						ctx.Print(`#{w.id}  {w.label}  ({w.expr})`)
+					end
 				end
 			end },
 		})
