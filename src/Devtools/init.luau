@@ -35,6 +35,55 @@ local function startStats()
 end
 
 -- ---------------------------------------------------------------------------
+-- log console: a structured ring buffer of the game's log stream, with replay
+-- ---------------------------------------------------------------------------
+
+local LOG_CAP = 500
+local logBuffer: { { clock: number, level: string, text: string } } = {}
+local logStarted = false
+
+local function startLogs()
+	if logStarted then
+		return
+	end
+	logStarted = true
+	game:GetService("LogService").MessageOut:Connect(function(message, messageType)
+		local level = "info"
+		if messageType == Enum.MessageType.MessageError then
+			level = "error"
+		elseif messageType == Enum.MessageType.MessageWarning then
+			level = "warn"
+		end
+		table.insert(logBuffer, { clock = os.clock(), level = level, text = message })
+		while #logBuffer > LOG_CAP do
+			table.remove(logBuffer, 1)
+		end
+	end)
+end
+
+-- ---------------------------------------------------------------------------
+-- network monitor: incoming RemoteEvent traffic for remotes you register
+-- ---------------------------------------------------------------------------
+
+local NET_CAP = 200
+local netBuffer: { { clock: number, name: string, kind: string, size: number } } = {}
+
+-- Watch a RemoteEvent's incoming traffic (client OnClientEvent). RemoteFunctions are skipped
+-- because OnClientInvoke is single-owner and hooking it would swallow the call. There's no
+-- vanilla way to intercept ALL remote traffic, so you register the ones you care about.
+local function watchRemote(remote: Instance)
+	if remote:IsA("RemoteEvent") then
+		remote.OnClientEvent:Connect(function(...)
+			local packed = table.pack(...)
+			table.insert(netBuffer, { clock = os.clock(), name = remote.Name, kind = "Event", size = packed.n })
+			while #netBuffer > NET_CAP do
+				table.remove(netBuffer, 1)
+			end
+		end)
+	end
+end
+
+-- ---------------------------------------------------------------------------
 -- instance path resolution (game.Workspace.Baseplate / Workspace.Spawn / ...)
 -- ---------------------------------------------------------------------------
 
@@ -93,6 +142,71 @@ local function profilerPanel(ctx)
 	end)
 end
 
+local function logsPanel(ctx)
+	startLogs()
+	local w = ctx.Window({ title = "logs" })
+	local search = w:Input("search", "")
+	local showInfo = w:Checkbox("info", true)
+	local showWarn = w:Checkbox("warn", true)
+	local showError = w:Checkbox("error", true)
+	w:Separator()
+	-- "replay": scrub anchors the view N entries back from the newest, so you can step back
+	-- through a recorded sequence instead of only seeing the tail.
+	local scrub = w:Slider("scrub back", 0, LOG_CAP, 0)
+	w:Separator()
+	w:Label(function()
+		local query = string.lower(search.get() or "")
+		local levels = { info = showInfo.get(), warn = showWarn.get(), error = showError.get() }
+		local filtered = {}
+		for _, entry in logBuffer do
+			if levels[entry.level] and (query == "" or string.find(string.lower(entry.text), query, 1, true)) then
+				table.insert(filtered, entry)
+			end
+		end
+		local back = math.floor(scrub.get())
+		local anchor = math.max(1, #filtered - back)
+		local lines = {}
+		for i = math.max(1, anchor - 17), anchor do
+			local entry = filtered[i]
+			if entry then
+				table.insert(lines, string.format("[%s] %s", entry.level, entry.text))
+			end
+		end
+		return #lines > 0 and table.concat(lines, "\n") or "(no matching logs)"
+	end)
+	w:Separator()
+	w:Button("clear", function()
+		table.clear(logBuffer)
+	end)
+	w:Button("close", function()
+		w:Close()
+	end)
+end
+
+local function netmonPanel(ctx)
+	local w = ctx.Window({ title = "netmon" })
+	w:Label("incoming RemoteEvent traffic (register with Karet.WatchRemote)")
+	w:Separator()
+	w:Label(function()
+		if #netBuffer == 0 then
+			return "(nothing yet)"
+		end
+		local lines = {}
+		for i = math.max(1, #netBuffer - 17), #netBuffer do
+			local e = netBuffer[i]
+			table.insert(lines, string.format("%-24s %s  x%d", e.name, e.kind, e.size))
+		end
+		return table.concat(lines, "\n")
+	end)
+	w:Separator()
+	w:Button("clear", function()
+		table.clear(netBuffer)
+	end)
+	w:Button("close", function()
+		w:Close()
+	end)
+end
+
 local function inspectWindow(ctx, target: Instance)
 	local w = ctx.Window({ title = "inspect: " .. target.Name })
 	w:Label(function()
@@ -142,11 +256,19 @@ end
 
 -- Register the whole Devtools extension into a Karet instance.
 function Devtools.register(Karet: any)
+	-- expose remote watching on the umbrella so games can feed the network monitor
+	Karet.WatchRemote = watchRemote
+
 	Karet.RegisterExtension({
 		Name = "Devtools",
-		Description = "live profiler + instance inspector",
+		Description = "profiler, inspector, log console, network monitor",
+		Init = function()
+			startLogs() -- start capturing immediately so the console has history when opened
+		end,
 		Panels = {
 			{ Name = "profiler", Description = "fps / frame / memory + graph", Open = profilerPanel },
+			{ Name = "logs", Description = "log console with filters + replay", Open = logsPanel },
+			{ Name = "netmon", Description = "incoming RemoteEvent traffic", Open = netmonPanel },
 		},
 		Commands = {
 			{
