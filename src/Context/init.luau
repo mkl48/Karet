@@ -6,6 +6,22 @@
 -- which the terminal/console provides. ctx.Abort cancels mid-handler by raising a tagged
 -- error the Host catches - so it unwinds the handler cleanly without a magic return value.
 
+--[=[
+	@class Context
+
+	The `ctx` object passed to every command handler. It carries the resolved input (`Args`,
+	`Flags`, `Modifiers`, `Input`), themed output methods (`Print`, `Success`, `Err`, ...), the
+	return pool (`Return`), and the rich surfaces (`UI`, `Window`, `Indicator`).
+
+	```lua
+	On = { Server = function(ctx)
+	    local who = ctx.Args.who
+	    if ctx.Flags.silent then return end
+	    ctx.Success(`hi {who.Name}`)
+	    ctx.Return(who)
+	end }
+	```
+]=]
 local Context = {}
 
 -- A unique tag so the Host can tell an intentional Abort from a real Lua error.
@@ -121,6 +137,37 @@ function Context.new(opts: Options): (any, Control)
 	local committedPayload: any = nil
 	local abortMsg: string? = nil
 
+	--[=[
+		@prop Args { [string]: any }
+		@within Context
+		The resolved, type-checked positional arguments, keyed by name.
+	]=]
+	--[=[
+		@prop Flags { [string]: boolean }
+		@within Context
+		Boolean toggles set with `-s` / `-p`.
+	]=]
+	--[=[
+		@prop Modifiers { [string]: any }
+		@within Context
+		Valued long options: `--reason=spam` -> `ctx.Modifiers.reason`.
+	]=]
+	--[=[
+		@prop Input any
+		@within Context
+		The piped value from the previous command in a pipeline (`a | b`), or nil.
+	]=]
+	--[=[
+		@prop Player Player?
+		@within Context
+		The calling player (nil in Studio / no-player contexts).
+	]=]
+	--[=[
+		@prop UI { [string]: any }
+		@within Context
+		The rich-output toolkit: `ctx.UI.Table{}`, `ctx.UI.Toast()`, `ctx.UI.Link()`, ... A no-op
+		off the terminal.
+	]=]
 	local ctx = {
 		Player = opts.player,
 		Command = opts.command,
@@ -139,6 +186,13 @@ function Context.new(opts: Options): (any, Control)
 		UI = opts.ui or NOOP_UI, -- rich output: ctx.UI.Table{...}, ctx.UI.Panel(...), ...
 	}
 
+	--[=[
+		@within Context
+		@method Print
+		@param message any
+		Print a line of normal output. `Success`, `Warn`, `Err`, `Info`, `Hint` and `Reply` are the
+		same but route to their own theme groups.
+	]=]
 	function ctx.Print(message: any)
 		opts.sink("Output", tostring(message))
 	end
@@ -170,6 +224,13 @@ function Context.new(opts: Options): (any, Control)
 
 	-- Push return values, matched positionally to the command's Returns schema by the
 	-- evaluator/pool. Nils are preserved as real slots.
+	--[=[
+		@within Context
+		@method Return
+		@param ... any
+		Push return values into the pool, matched positionally to the command's `Returns` schema.
+		These feed `/` references, pipelines (`a | b`), and `Karet.Run`'s result. Nils are preserved.
+	]=]
 	function ctx.Return(...)
 		local packed = table.pack(...)
 		for i = 1, packed.n do
@@ -200,7 +261,13 @@ function Context.new(opts: Options): (any, Control)
 		return NOOP_WINDOW
 	end
 
-	-- Cancel mid-handler with a message.
+	--[=[
+		@within Context
+		@method Abort
+		@param message string?
+		Cancel the handler mid-run with a message. The command's result becomes `{ ok = false }`,
+		so chains (`a && b`) see the failure. Unwinds cleanly via a tagged error.
+	]=]
 	function ctx.Abort(message: string?)
 		abortMsg = message or "aborted"
 		error({ [ABORT] = true, message = abortMsg }, 0)

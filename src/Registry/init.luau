@@ -53,6 +53,13 @@ export type Builder = {
 
 local VALID_NETWORK = { Shared = true, Client = true, Server = true, Context = true }
 
+--[=[
+	@class Registry
+
+	Holds the command definitions, keyed by name (case-insensitive) with alias resolution. One
+	registry is shared across both realms. You usually go through [Karet.Register] /
+	[Karet.Command] rather than touching this directly.
+]=]
 function Registry.new()
 	return setmetatable({
 		commands = {} :: { [string]: Definition }, -- keyed by lowercase Name
@@ -72,7 +79,13 @@ local function validate(def: Definition)
 	end
 end
 
--- Register a command from a table definition. Returns the stored definition.
+--[=[
+	@within Registry
+	@method register
+	@param def Definition
+	@return Definition
+	Register a command from a table definition (validated). Returns the stored definition.
+]=]
 function Registry:register(def: Definition): Definition
 	validate(def)
 	local key = string.lower(def.Name)
@@ -100,7 +113,13 @@ function Registry:unregister(name: string)
 	end
 end
 
--- Resolve a name or alias to a definition (case-insensitive).
+--[=[
+	@within Registry
+	@method get
+	@param name string
+	@return Definition?
+	Resolve a name or alias to a definition (case-insensitive).
+]=]
 function Registry:get(name: string): Definition?
 	local key = string.lower(name)
 	local direct = self.commands[key]
@@ -115,7 +134,12 @@ function Registry:has(name: string): boolean
 	return self:get(name) ~= nil
 end
 
--- All registered command names, sorted.
+--[=[
+	@within Registry
+	@method list
+	@return {string}
+	All registered command names, sorted.
+]=]
 function Registry:list(): { string }
 	local names = {}
 	for _, def in self.commands do

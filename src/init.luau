@@ -51,6 +51,29 @@ export type TypeDefinition = Types.Definition
 export type RateLimit = { MaxCalls: number, Window: number }
 export type ToggleSpec = string | { Key: string, Modifier: string? }
 
+--[=[
+	@interface StartConfig
+	@within Karet
+	.Toggle ToggleSpec? -- key / shortcut to open the terminal, e.g. "Semicolon" or "LeftControl+Semicolon"
+	.Theme (string | ThemePalette)? -- a built-in theme name or a palette
+	.Placement ("Window" | "Top" | "Bottom" | "Middle")? -- where the window / bar sits
+	.Compact boolean? -- single-line command bar instead of the full window
+	.Draggable boolean? -- drag the Window-placement terminal by its title bar
+	.Parent Instance? -- where to mount (defaults to PlayerGui)
+	.Size UDim2? -- override the window size
+	.Position UDim2? -- override the window position
+	.Kaveat boolean? -- enable the Kaveat editor
+	.PromptType ("text" | "window")? -- how Dangerous commands confirm: terminal y/N or an Iris modal
+	.Persist boolean? -- save / load the profile via Pik DataStores
+	.Admin boolean? -- enable the moderation suite (kick / ban / mute / audit + dashboard)
+	.BuiltIns boolean? -- register built-in commands (default true)
+	.DefaultRole string? -- server: default role for players
+	.RateLimit RateLimit? -- server: rate limiting (reserved)
+	.KaveatExec (boolean | (player: Player) -> boolean)? -- server: allow kaveat to run code
+
+	The options table passed to [Karet.Start]. The same shape is used on both realms; each
+	realm reads the options that apply to it.
+]=]
 export type StartConfig = {
 	Toggle: ToggleSpec?, -- key / shortcut to open the terminal, e.g. "Semicolon" or "LeftControl+Semicolon"
 	Theme: (string | ThemePalette)?, -- a built-in theme name or a palette
@@ -70,8 +93,29 @@ export type StartConfig = {
 	KaveatExec: (boolean | (player: Player) -> boolean)?, -- server: allow kaveat to run code (studio always allowed)
 }
 
+--[=[
+	@class Karet
+
+	The Karet entry point. `require` it on both realms and call [Karet.Start] once per realm:
+
+	```lua
+	local Karet = require(game.ReplicatedStorage.Karet)
+	Karet.Start({ Toggle = "Semicolon", Theme = "tokyonight", Kaveat = true })
+	```
+
+	`Karet` is the product, the terminal surface, and the shell grammar that runs inside it.
+	Register your own commands with [Karet.Register], gate them with the permission hooks, and
+	hook the lifecycle with the middleware hooks. The shell, theme engine, editor and rich
+	output toolkit hang off this table too ([Karet.Shell], [Karet.Theme], ...).
+]=]
 local Karet = {}
 
+--[=[
+	@prop Version string
+	@within Karet
+	@readonly
+	The Karet version string, e.g. `"0.1.0"`.
+]=]
 Karet.Version = "0.1.0"
 
 -- ---------------------------------------------------------------------------
@@ -131,13 +175,28 @@ Karet.WindowManager = WindowManager
 local extensions = Extensions.new()
 Karet.Extensions = extensions
 
--- Register a dockable panel (a named view, usually built with ctx.Window inside Open).
+--[=[
+	@within Karet
+	@function RegisterPanel
+	@tag Commands
+	@param panel Panel
+	@return Panel
+	Register a dockable panel, a named view usually built with `ctx.Window` inside its `Open`.
+	Panels are surfaced by the `panels` command and opened with `open <name>`.
+]=]
 function Karet.RegisterPanel(panel: Extensions.Panel): Extensions.Panel
 	return extensions:registerPanel(panel)
 end
 
--- Register a whole extension: its Commands + Types are wired into Karet, its Panels become
--- openable, and Init(Karet) runs once. The unit that makes Karet a platform.
+--[=[
+	@within Karet
+	@function RegisterExtension
+	@tag Commands
+	@param ext Extension
+	@return Extension
+	Register a whole extension: its `Commands` and `Types` are wired into Karet, its `Panels`
+	become openable, and `Init(Karet)` runs once. This is the unit that makes Karet a platform.
+]=]
 function Karet.RegisterExtension(ext: Extensions.Extension): Extensions.Extension
 	assert(type(ext) == "table" and type(ext.Name) == "string" and ext.Name ~= "", "Karet.RegisterExtension: needs a Name")
 	if ext.Types then
@@ -166,6 +225,13 @@ function Karet.RegisterExtension(ext: Extensions.Extension): Extensions.Extensio
 	return ext
 end
 
+--[=[
+	@within Karet
+	@function Panels
+	@tag Commands
+	@return {Panel}
+	Every registered panel.
+]=]
 function Karet.Panels(): { Extensions.Panel }
 	return extensions:listPanels()
 end
@@ -180,10 +246,27 @@ Karet.Query = query
 -- `(x = ...)` assignments all see the same table. Seed defaults before Karet.Start.
 Karet.Env = {} :: { [string]: any }
 
+--[=[
+	@within Karet
+	@function SetVar
+	@tag Variables
+	@param name string
+	@param value any
+	Set a shell variable. The same value is readable in the shell as `@name`, since this writes
+	straight into the evaluator's scope ([Karet.Env]). Seed defaults before [Karet.Start].
+]=]
 function Karet.SetVar(name: string, value: any)
 	Karet.Env[name] = value
 end
 
+--[=[
+	@within Karet
+	@function GetVar
+	@tag Variables
+	@param name string
+	@return any
+	Read a shell variable (the `@name` store).
+]=]
 function Karet.GetVar(name: string): any
 	return Karet.Env[name]
 end
@@ -192,8 +275,15 @@ end
 Karet.Env.pi = math.pi
 Karet.Env.version = Karet.Version
 
--- Run a line through the shell (alias-expanded). Used by panels/buttons (e.g. the admin
--- dashboard) and available publicly. Returns the chain result, or nil before Start.
+--[=[
+	@within Karet
+	@function Run
+	@tag Output
+	@param line string
+	@return any
+	Run a line through the shell (alias-expanded), exactly as if it had been typed. Returns the
+	chain result `{ ok, returns?, error? }`, or `nil` before [Karet.Start] has run.
+]=]
 function Karet.Run(line: string): any
 	if not Karet.Evaluator then
 		return nil
@@ -206,8 +296,17 @@ function Karet.Run(line: string): any
 	return Karet.Evaluator:run(parsed.ast)
 end
 
--- Pop a transient toast notification on the active terminal. No-op on the server or before a
--- terminal exists. opts: { group, title, duration }. Handy for extensions and admin events.
+--[=[
+	@within Karet
+	@function Toast
+	@tag Output
+	@client
+	@param text string
+	@param opts { group: string?, title: string?, duration: number? }?
+	Pop a transient toast notification on the active terminal. No-op on the server or before a
+	terminal exists. `group` keys into the theme like any output group. Handy for extensions and
+	admin events.
+]=]
 function Karet.Toast(text: string, opts: { [string]: any }?)
 	if Karet.Active then
 		Karet.Active:toast(text, opts)
@@ -237,6 +336,15 @@ local profiles = { default = Profile.new("default") }
 Karet.Profiles = profiles
 Karet.Profile = profiles.default
 
+--[=[
+	@within Karet
+	@function UseProfile
+	@tag Setup
+	@param name string
+	@return Profile
+	Switch the active profile (history, theme, saved kavs, aliases, functions), creating it if
+	it doesn't exist yet. [Karet.Profile] then points at it.
+]=]
 function Karet.UseProfile(name: string): Profile.Profile
 	local p = profiles[name]
 	if not p then
@@ -254,26 +362,63 @@ Karet.Config = {}
 -- command + type registration
 -- ---------------------------------------------------------------------------
 
--- Register a command from a table definition (DESIGN → Command definition).
+--[=[
+	@within Karet
+	@function Register
+	@tag Commands
+	@param def CommandDefinition
+	@return CommandDefinition
+	Register a command from a table definition. See [the commands guide](/docs/commands) for the
+	full shape (Args, Flags, Modifiers, On, Network, Permission).
+]=]
 function Karet.Register(def: CommandDefinition): CommandDefinition
 	return registry:register(def)
 end
 
--- Start the fluent builder: Karet.Command("ban"):Alias("b"):...:Register().
+--[=[
+	@within Karet
+	@function Command
+	@tag Commands
+	@param name string
+	@return CommandBuilder
+	Start the fluent builder: `Karet.Command("ban"):Alias("b"):Network("Server"):On(...):Register()`.
+]=]
 function Karet.Command(name: string): CommandBuilder
 	return registry:command(name)
 end
 
--- Register a custom argument type (à la Cmdr/Conch).
+--[=[
+	@within Karet
+	@function DefineType
+	@tag Commands
+	@param name string
+	@param def TypeDefinition
+	Register a custom argument type (a la Cmdr). Types parse and validate the raw token into a
+	typed value, and can supply autocomplete.
+]=]
 function Karet.DefineType(name: string, def: TypeDefinition)
 	types:Define(name, def)
 end
 
--- Names of all registered commands, and a single command's definition.
+--[=[
+	@within Karet
+	@function List
+	@tag Commands
+	@return {string}
+	The names of every registered command.
+]=]
 function Karet.List(): { string }
 	return registry:list()
 end
 
+--[=[
+	@within Karet
+	@function Get
+	@tag Commands
+	@param name string
+	@return CommandDefinition?
+	A single command's definition, or nil.
+]=]
 function Karet.Get(name: string): any?
 	return registry:get(name)
 end
@@ -282,31 +427,90 @@ end
 -- auth & roles (server-authoritative)
 -- ---------------------------------------------------------------------------
 
+--[=[
+	@within Karet
+	@function SetRoleHook
+	@tag Permissions
+	@server
+	@param fn (player: Player) -> string
+	Decide a player's role. Roles are compared against a command's `Permission` using the rank
+	ordering from [Karet.SetRoles].
+]=]
 function Karet.SetRoleHook(fn: (player: Player) -> string)
 	auth.roleHook = fn
 end
 
+--[=[
+	@within Karet
+	@function SetAuthHook
+	@tag Permissions
+	@server
+	@param fn (player: Player, command: string) -> boolean?
+	A per-command gate. Return `true` to allow, `false` to deny, or `nil` to fall through to the
+	normal role check.
+]=]
 function Karet.SetAuthHook(fn: (player: Player, command: string) -> boolean?)
 	auth.authHook = fn
 end
 
+--[=[
+	@within Karet
+	@function SetGroupHook
+	@tag Permissions
+	@server
+	@param fn (player: Player) -> number
+	Resolve a player's numeric rank (e.g. a Roblox group rank), for commands that compare against
+	a number.
+]=]
 function Karet.SetGroupHook(fn: (player: Player) -> number)
 	auth.groupHook = fn
 end
 
+--[=[
+	@within Karet
+	@function AllowPlayer
+	@tag Permissions
+	@server
+	@param userId number
+	Allowlist a userId outright.
+]=]
 function Karet.AllowPlayer(userId: number)
 	auth.allowed[userId] = true
 end
 
+--[=[
+	@within Karet
+	@function DenyPlayer
+	@tag Permissions
+	@server
+	@param userId number
+	Denylist a userId outright.
+]=]
 function Karet.DenyPlayer(userId: number)
 	auth.denied[userId] = true
 end
 
+--[=[
+	@within Karet
+	@function SetDefaultRole
+	@tag Permissions
+	@server
+	@param role string
+	The role players get when no role hook is set or it returns nothing.
+]=]
 function Karet.SetDefaultRole(role: string)
 	auth.defaultRole = role
 end
 
--- Define the role -> rank ordering used for Permission comparisons.
+--[=[
+	@within Karet
+	@function SetRoles
+	@tag Permissions
+	@server
+	@param ranks { [string]: number }
+	Define the role -> rank ordering used for `Permission` comparisons, e.g.
+	`{ User = 0, Mod = 50, Admin = 100 }`.
+]=]
 function Karet.SetRoles(ranks: { [string]: number })
 	auth.roleRanks = ranks
 end
@@ -315,18 +519,47 @@ end
 -- middleware
 -- ---------------------------------------------------------------------------
 
+--[=[
+	@within Karet
+	@function PreExecute
+	@tag Middleware
+	@param fn (ctx: Context) -> any?
+	Run before every command. Return `false` to cancel it.
+]=]
 function Karet.PreExecute(fn: (ctx: Context) -> any?)
 	table.insert(hooks.pre, fn)
 end
 
+--[=[
+	@within Karet
+	@function PostExecute
+	@tag Middleware
+	@param fn (ctx: Context, result: any) -> ()
+	Run after every command with its result.
+]=]
 function Karet.PostExecute(fn: (ctx: Context, result: any) -> ())
 	table.insert(hooks.post, fn)
 end
 
+--[=[
+	@within Karet
+	@function OnErr
+	@tag Middleware
+	@param fn (ctx: Context, err: any) -> ()
+	Run when a command errors.
+]=]
 function Karet.OnErr(fn: (ctx: Context, err: any) -> ())
 	table.insert(hooks.onErr, fn)
 end
 
+--[=[
+	@within Karet
+	@function OnConnect
+	@tag Middleware
+	@server
+	@param fn (player: Player) -> ()
+	Run when a player joins.
+]=]
 function Karet.OnConnect(fn: (player: Player) -> ())
 	table.insert(hooks.onConnect, fn)
 end
@@ -1132,8 +1365,20 @@ local function startServer(options: StartConfig)
 	return nil
 end
 
--- Boot Karet. Client → build+wire the terminal and the command evaluator; server → stand
--- up the networking listener + auth pipeline. One `Karet.Start(...)` works in both realms.
+--[=[
+	@within Karet
+	@function Start
+	@tag Setup
+	@param opts StartConfig?
+	@return Terminal?
+	Boot Karet. On the client this builds and wires the terminal and the command evaluator and
+	returns the [Terminal]; on the server it stands up the networking listener and the auth
+	pipeline and returns `nil`. The same call works in both realms.
+
+	```lua
+	Karet.Start({ Toggle = "Semicolon", Theme = "tokyonight", Kaveat = true })
+	```
+]=]
 function Karet.Start(opts: StartConfig?): Terminal.Terminal?
 	local options: StartConfig = opts or {}
 	if RunService:IsClient() then

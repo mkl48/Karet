@@ -14,8 +14,34 @@
 -- This module uses Roblox datatypes (Color3) and is intended to run in-engine; the
 -- headless lune test suite loads only src/Shell, so it never imports this file.
 
+--[=[
+	@class Theme
+
+	One semantic colorscheme, piped through every Karet surface (terminal, Kaveat editor,
+	autocomplete, pickers, windows). A theme is not a set of raw frame colours, it's a set of
+	semantic highlight **groups** ([Group]) the way a Neovim colorscheme is, so
+	`Theme.Set("gruvbox")` recolours the whole UI at once.
+
+	Authors may define a *partial* palette: any group left out is derived from the ones present
+	(Surface lightens Background, Prompt follows Accent, ...), so a minimal theme still produces
+	a complete, coherent [Palette]. Reach it as `Karet.Theme`.
+
+	```lua
+	Karet.Theme.Define("midnight", { Background = Color3.fromHex("0b0e14"), Accent = Color3.fromHex("7aa2f7") })
+	Karet.Theme.Set("midnight")
+	```
+]=]
 local Theme = {}
 
+--[=[
+	@type Group string
+	@within Theme
+	One semantic highlight group. The full set covers surfaces (`Background`, `Surface`,
+	`Foreground`, `Muted`, `Border`, `Selection`), accents (`Accent`, `AccentAlt`), syntax
+	(`Command`, `Keyword`, `String`, `Number`, `Comment`, `Operator`, `Variable`, `Type`, ...),
+	diagnostics (`Error`, `Warn`, `Info`, `Hint`, `Success`) and terminal roles (`Prompt`,
+	`Output`, ...). See [Theme.Groups] for the canonical list.
+]=]
 -- The full set of semantic groups. Adding a member here makes it themable everywhere;
 -- the deriver (below) must know how to fill it when an author omits it.
 export type Group =
@@ -59,6 +85,12 @@ export type Group =
 	| "Match" -- fuzzy-match highlight in completion lists
 	| "Output" -- normal command output text
 
+--[=[
+	@type Palette { [Group]: Color3 }
+	@within Theme
+	A map from [Group] to colour. May be partial when defining a theme (missing groups are
+	derived); [Theme.Get] always returns a complete one.
+]=]
 export type Palette = { [Group]: Color3 }
 
 -- The canonical ordered list of every group, so the deriver and validators can iterate.
@@ -245,8 +277,16 @@ local function validate(name: string, palette: Palette)
 	end
 end
 
--- Define (or redefine) a named theme from a partial palette. Returns the *resolved*
--- complete palette so callers can pass it straight to Set or inspect it.
+--[=[
+	@within Theme
+	@function Define
+	@param name string
+	@param palette Palette
+	@return Palette
+	Define (or redefine) a named theme from a partial palette. Returns the *resolved* complete
+	palette, so you can pass it straight to [Theme.Set] or inspect it. Redefining the active
+	theme recolours live.
+]=]
 function Theme.Define(name: string, palette: Palette): Palette
 	assert(type(name) == "string" and name ~= "", "Karet.Theme.Define: name must be a non-empty string")
 	validate(name, palette)
@@ -260,8 +300,14 @@ function Theme.Define(name: string, palette: Palette): Palette
 	return resolved
 end
 
--- Set the active theme by name or by an explicit (partial) palette. Switching fires
--- OnChanged so every subscribed surface recolors at once.
+--[=[
+	@within Theme
+	@function Set
+	@param theme string | Palette
+	Set the active theme by name or by an explicit (partial) palette. Switching fires
+	[Theme.OnChanged], so every subscribed surface recolours at once. Errors if a name isn't
+	defined.
+]=]
 function Theme.Set(theme: string | Palette)
 	if type(theme) == "string" then
 		local resolved = registry[theme]
@@ -277,8 +323,14 @@ function Theme.Set(theme: string | Palette)
 	emit()
 end
 
--- Read the active palette, or a single group's colour. Theme.Get() -> full palette;
--- Theme.Get("Error") -> Color3.
+--[=[
+	@within Theme
+	@function Get
+	@param group Group?
+	@return Palette | Color3
+	Read the active palette, or a single group's colour. `Theme.Get()` returns the full (always
+	complete) palette; `Theme.Get("Error")` returns that group's `Color3`.
+]=]
 function Theme.Get(group: Group?): any
 	if group == nil then
 		return active
@@ -290,12 +342,22 @@ function Theme.Get(group: Group?): any
 	return color
 end
 
--- The name of the active theme, or nil if a raw palette was Set directly.
+--[=[
+	@within Theme
+	@function Name
+	@return string?
+	The name of the active theme, or nil if a raw palette was [Theme.Set] directly.
+]=]
 function Theme.Name(): string?
 	return activeName
 end
 
--- Names of all defined themes.
+--[=[
+	@within Theme
+	@function List
+	@return {string}
+	Names of all defined themes.
+]=]
 function Theme.List(): { string }
 	local names = {}
 	for name in registry do
@@ -305,13 +367,25 @@ function Theme.List(): { string }
 	return names
 end
 
--- The canonical list of group names (a copy, so callers can't mutate the source).
+--[=[
+	@within Theme
+	@function Groups
+	@return {Group}
+	The canonical list of group names (a copy, so callers can't mutate the source).
+]=]
 function Theme.Groups(): { Group }
 	return table.clone(GROUPS)
 end
 
--- Subscribe to theme changes; the callback fires immediately with the current theme and
--- again on every Set/redefine. Returns an unsubscribe function.
+--[=[
+	@within Theme
+	@function OnChanged
+	@param fn (palette: Palette, name: string?) -> ()
+	@return () -> ()
+	Subscribe to theme changes. The callback fires immediately with the current theme and again
+	on every [Theme.Set] or redefine. Returns an unsubscribe function. This is how every Karet
+	surface recolours live.
+]=]
 function Theme.OnChanged(fn: (Palette, string?) -> ()): () -> ()
 	table.insert(listeners, fn)
 	fn(active, activeName)

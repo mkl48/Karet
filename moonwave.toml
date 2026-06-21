@@ -1,0 +1,41 @@
+title = "Karet"
+gitRepoUrl = "https://github.com/mkl48/Karet"
+gitSourceBranch = "master"
+changelog = true
+# order the API sidebar: the entry point first, then the framework, then the surfaces
+classOrder = [
+    "Karet",
+    "Context",
+    "Registry",
+    "Theme",
+    "Terminal",
+]
+[docusaurus]
+onBrokenLinks = "warn"
+onBrokenMarkdownLinks = "warn"
+onBrokenAnchors = "warn"
+organizationName = "mkl48"
+projectName = "Karet"
+url = "https://mkl48.github.io"
+baseUrl = "/Karet/"
+tagline = "an in-game command framework and terminal for Roblox"
+
+[home]
+enabled = true
+includeReadme = true
+
+[[home.features]]
+title = "A real shell"
+description = "typed args validated on both realms, chains, pipes, guards, functions and a proper grammar - not just a chat-command parser"
+
+[[home.features]]
+title = "One theme, everywhere"
+description = "a neovim-style colorscheme piped through the terminal, editor, pickers and windows. switch it live, or edit it in the colour picker"
+
+[[home.features]]
+title = "Batteries included"
+description = "Kaveat luau editor, devtools, an admin suite, an extension platform, toasts, a HUD and DataStore persistence out of the box"
+
+[footer]
+style = "dark"
+copyright = "Copyright © 2026 mkl48. Built with Moonwave."

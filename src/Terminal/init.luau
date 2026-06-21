@@ -79,8 +79,23 @@ local COMPACT_PLACEMENTS = {
 	Middle = { Anchor = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(560, BAR_H) },
 }
 
--- opts: { Compact = boolean?, Placement = string?, Parent = Instance?, Size = UDim2?,
---         Position = UDim2?, Draggable = boolean? }
+--[=[
+	@class Terminal
+	@client
+
+	The visible console surface: window chrome, the scrolling output log, the input row, plus the
+	toast stack and the live HUD. Driven entirely from the active [Theme] (recolours live). You
+	get the active one back from [Karet.Start] on the client, or as `Karet.Active`.
+
+	Two presentations: the full window (default) and a single-line `Compact` command bar.
+]=]
+--[=[
+	@within Terminal
+	@function new
+	@param opts { Compact: boolean?, Placement: string?, Parent: Instance?, Size: UDim2?, Position: UDim2?, Draggable: boolean? }?
+	@return Terminal
+	Construct a terminal. [Karet.Start] does this for you; call it directly only for a custom setup.
+]=]
 function Terminal.new(opts: { [string]: any }?)
 	local self = setmetatable({}, Terminal)
 	local options = opts or {}
@@ -629,8 +644,14 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 	self:colorPromptModal()
 end
 
--- Pop a transient toast notification (works whether the window is open or closed).
--- opts: { group, title, duration }. group keys into the theme like any output group.
+--[=[
+	@within Terminal
+	@method toast
+	@param text string
+	@param opts { group: string?, title: string?, duration: number? }?
+	Pop a transient toast notification. Works whether the window is open or closed (the stack
+	lives on the ScreenGui). `group` keys into the theme like any output group.
+]=]
 function Terminal:toast(text: string, opts: { [string]: any }?)
 	if self.toaster then
 		self.toaster:push(text, opts)
@@ -688,6 +709,11 @@ end
 -- open / close lifecycle
 -- ---------------------------------------------------------------------------
 
+--[=[
+	@within Terminal
+	@method open
+	Show the terminal and capture input focus.
+]=]
 function Terminal:open()
 	if self.isOpen then
 		return
@@ -716,6 +742,11 @@ function Terminal:close()
 	end
 end
 
+--[=[
+	@within Terminal
+	@method toggle
+	Open the terminal if closed, close it if open.
+]=]
 function Terminal:toggle()
 	if self.isOpen then
 		self:close()
@@ -806,6 +837,14 @@ end
 -- output API
 -- ---------------------------------------------------------------------------
 
+--[=[
+	@within Terminal
+	@method print
+	@param text string
+	@param group string?
+	Print a line to the output log, coloured by a theme group (defaults to `"Output"`). `error`,
+	`warn`, `info` and `success` are shorthands for their groups.
+]=]
 function Terminal:print(text: string, group: string?)
 	self:emit(group or "Output", text)
 end
