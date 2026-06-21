@@ -97,7 +97,8 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 		return nil
 	end
 	local function skipNewlines()
-		while at(K.Newline) do
+		-- a ';' separates statements exactly like a newline does
+		while at(K.Newline) or at(K.Semicolon) do
 			advance()
 		end
 	end
@@ -577,7 +578,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 			if chain then
 				table.insert(chains, chain)
 			end
-			if at(K.Newline) then
+			if at(K.Newline) or at(K.Semicolon) then
 				skipNewlines()
 			elseif pos == before then
 				-- no progress: force advance so we never loop forever

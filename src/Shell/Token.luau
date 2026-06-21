@@ -9,6 +9,7 @@ local Token = {}
 
 Token.Kind = {
 	Newline = "Newline",
+	Semicolon = "Semicolon", -- ; (statement separator, same role as a newline)
 
 	-- literals / words
 	Number = "Number", -- 5, 3.14

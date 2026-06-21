@@ -47,6 +47,14 @@ export type Services = {
 		unset: (name: string) -> (),
 		list: () -> { string },
 	}?,
+	-- named multi-statement macros. set() stores the body AND registers a runnable command,
+	-- so a function shows up in help/completion and works inside chains/pipes/other functions.
+	functions: {
+		get: (name: string) -> any,
+		set: (name: string, body: string) -> (),
+		unset: (name: string) -> (),
+		list: () -> { string },
+	}?,
 	version: string,
 }
 
@@ -471,6 +479,76 @@ function Commands.build(services: Services): { any }
 				else
 					for _, n in names do
 						ctx.Print(`{n} -> {services.aliases.get(n)}`)
+					end
+				end
+			end },
+		},
+
+		-- ----- functions / macros -----
+
+		{
+			Name = "function",
+			Aliases = { "fn", "def" },
+			Description = 'name a sequence of commands: function hi "echo hello; echo there"  (then run: hi)',
+			Network = "Client",
+			Args = {
+				{ Name = "name", Types = { "String" }, Required = true },
+				{ Name = "body", Types = { "String" }, Required = true },
+			},
+			On = { Client = function(ctx)
+				if not services.functions then
+					return ctx.Err("functions unavailable")
+				end
+				local name = ctx.Args.name
+				-- dont let a function clobber a real command (but redefining a function is fine)
+				if services.get(name) and services.functions.get(name) == nil then
+					return ctx.Err(`'{name}' is already a command`)
+				end
+				services.functions.set(name, ctx.Args.body)
+				ctx.Success(`{name}() defined`)
+			end },
+		},
+
+		{
+			Name = "unfunction",
+			Aliases = { "delfn", "undef" },
+			Description = "remove a function",
+			Network = "Client",
+			Args = { { Name = "name", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				if not services.functions then
+					return ctx.Err("functions unavailable")
+				end
+				if services.functions.get(ctx.Args.name) == nil then
+					return ctx.Warn(`no function '{ctx.Args.name}'`)
+				end
+				services.functions.unset(ctx.Args.name)
+				ctx.Info(`removed function {ctx.Args.name}`)
+			end },
+		},
+
+		{
+			Name = "functions",
+			Aliases = { "fns" },
+			Description = "list defined functions and their bodies",
+			Network = "Client",
+			On = { Client = function(ctx)
+				if not services.functions then
+					return ctx.Err("functions unavailable")
+				end
+				local names = services.functions.list()
+				if #names == 0 then
+					return ctx.Info('no functions (try: function hi "echo hello")')
+				end
+				if ctx.UI.available == true then
+					local rows = {}
+					for _, n in names do
+						table.insert(rows, { n, tostring(services.functions.get(n)) })
+					end
+					ctx.UI.Table({ headers = { "function", "body" }, rows = rows })
+				else
+					for _, n in names do
+						ctx.Print(`{n}() = {services.functions.get(n)}`)
 					end
 				end
 			end },
@@ -1179,6 +1257,62 @@ function Commands.build(services: Services): { any }
 					jobs.remove(id)
 				end)
 				ctx.Success(`job {id} started: every {interval}s {line}`)
+				ctx.Return(id)
+			end },
+		})
+		add({
+			Name = "watch",
+			Aliases = { "onchange" },
+			Description = 'run a command when an expressions value changes: watch health "notify ouch"',
+			Network = "Client",
+			Args = {
+				{ Name = "expr", Types = { "String" }, Required = true },
+				{ Name = "command", Types = { "String" }, Required = true },
+			},
+			Modifiers = {
+				{ Name = "interval", Types = { "Number" }, Default = 0.5, Description = "seconds between polls" },
+			},
+			Flags = {
+				{ Name = "immediate", Short = "i", Description = "also run once right away" },
+			},
+			On = { Client = function(ctx)
+				local interval = math.max(0.1, ctx.Modifiers.interval or 0.5)
+				local expr = ctx.Args.expr
+				local line = ctx.Args.command
+				-- read the watched expression and pull its first return value
+				local function read(): any
+					local r = services.run(expr)
+					if type(r) == "table" and r.returns then
+						return r.returns[1]
+					end
+					return nil
+				end
+				local running = true
+				local id = jobs.add(`watch {expr}: {line}`, function()
+					running = false
+				end)
+				task.spawn(function()
+					local prev = read()
+					if ctx.Flags.immediate then
+						services.run(line)
+					end
+					while running do
+						local t = 0
+						while running and t < interval do
+							t += task.wait()
+						end
+						if not running then
+							break
+						end
+						local cur = read()
+						if cur ~= prev then
+							prev = cur
+							services.run(line)
+						end
+					end
+					jobs.remove(id)
+				end)
+				ctx.Success(`job {id} watching {expr}`)
 				ctx.Return(id)
 			end },
 		})

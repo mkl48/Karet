@@ -316,6 +316,8 @@ function Lexer.tokenize(source: string): LexResult
 					kind = Kind.Amp
 				elseif b == 124 then
 					kind = Kind.Pipe
+				elseif b == 59 then
+					kind = Kind.Semicolon
 				elseif b == 62 then
 					kind = Kind.Gt
 				elseif b == 60 then

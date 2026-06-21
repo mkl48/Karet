@@ -101,6 +101,12 @@ return function(t)
 		'(program (chain (cmd give "P" "coins" 500) && (cmd kick "P" "bye")))'
 	)
 
+	ok(
+		"semicolons separate statements like newlines",
+		"echo one; echo two",
+		'(program (chain (cmd echo "one")) (chain (cmd echo "two")))'
+	)
+
 	ok("flags trail the command", 'ban P 1d "g" -s -p', '(program (chain (cmd ban "P" "1d" "g" -[s,p])))')
 
 	ok("stacked flag stays raw for the registry", "ban P -sp", "(program (chain (cmd ban \"P\" -[sp])))")

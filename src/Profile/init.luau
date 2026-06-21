@@ -11,6 +11,7 @@ export type Profile = {
 	History: { string },
 	Kavs: { [string]: string },
 	Aliases: { [string]: string },
+	Functions: { [string]: string },
 }
 
 function Profile.new(name: string?): Profile
@@ -21,6 +22,7 @@ function Profile.new(name: string?): Profile
 		History = {},
 		Kavs = {},
 		Aliases = {},
+		Functions = {},
 	}, Profile) :: any
 end
 

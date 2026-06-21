@@ -60,7 +60,7 @@ export type StartConfig = {
 	Position: UDim2?, -- override the window position
 	Kaveat: boolean?, -- enable the Kaveat editor
 	PromptType: ("text" | "window")?, -- how Dangerous commands confirm: terminal y/N or an Iris modal
-	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases) via Pik DataStores
+	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores
 	Admin: boolean?, -- enable the moderation suite (kick/ban/mute/audit + dashboard)
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	DefaultRole: string?, -- server: default role for players
@@ -436,6 +436,21 @@ local function startClient(options: StartConfig)
 		end,
 	}
 
+	-- re-run a line through the shell (expand aliases, parse, evaluate). shared by the `run`
+	-- service and the function/macro handlers, so it lives outside the services table (a table
+	-- constructor cant reference itself).
+	local function runLine(line: string): any
+		if not Karet.Evaluator then
+			return { ok = false, error = "shell not ready" }
+		end
+		line = Alias.expand(line, Karet.Profile.Aliases)
+		local parsed = Karet.Parse(line)
+		if #parsed.diagnostics > 0 then
+			return { ok = false, error = parsed.diagnostics[1].message }
+		end
+		return Karet.Evaluator:run(parsed.ast)
+	end
+
 	-- Built-in commands (help/clear/echo/theme/...), unless opted out.
 	if options.BuiltIns ~= false then
 		local services = {
@@ -528,23 +543,53 @@ local function startClient(options: StartConfig)
 					return names
 				end,
 			},
-			-- re-run a line through the shell (used by `repc`/`every`). returns the chain result.
-			run = function(line)
-				if not Karet.Evaluator then
-					return { ok = false, error = "shell not ready" }
-				end
-				line = Alias.expand(line, Karet.Profile.Aliases)
-				local parsed = Karet.Parse(line)
-				if #parsed.diagnostics > 0 then
-					return { ok = false, error = parsed.diagnostics[1].message }
-				end
-				return Karet.Evaluator:run(parsed.ast)
-			end,
+			-- named macros, stored on the profile. set() also registers a real command that
+			-- runs the body, so functions appear in help/completion and nest inside each other.
+			functions = {
+				get = function(name)
+					return Karet.Profile.Functions[name]
+				end,
+				set = function(name, body)
+					Karet.Profile.Functions[name] = body
+					registry:register({
+						Name = name,
+						Description = `function: {body}`,
+						Network = "Client",
+						On = { Client = function(ctx)
+							local b = Karet.Profile.Functions[name]
+							if b == nil then
+								return
+							end
+							-- run the body through the shell; bubble up a failure so chains see it
+							local out = runLine(b)
+							if type(out) == "table" and out.ok == false and out.error then
+								ctx.Abort(out.error)
+							end
+						end },
+					})
+				end,
+				unset = function(name)
+					Karet.Profile.Functions[name] = nil
+					registry:unregister(name)
+				end,
+				list = function()
+					local names = {}
+					for k in Karet.Profile.Functions do
+						table.insert(names, k)
+					end
+					table.sort(names)
+					return names
+				end,
+			},
+			-- re-run a line through the shell (used by `repc`/`every`/`watch`). returns the chain result.
+			run = runLine,
 			version = Karet.Version,
 		}
 		for _, def in Commands.build(services) do
 			registry:register(def)
 		end
+		-- expose the function store so persistence-load can re-register saved macros
+		Karet.Functions = services.functions
 	end
 
 	-- Live, editable settings (the @CONFIG editor writes here). Seeded from Start options.
@@ -735,6 +780,14 @@ local function startClient(options: StartConfig)
 				fillArray(Karet.Profile.History, d.History)
 				fillMap(Karet.Profile.Kavs, d.Kavs)
 				fillMap(Karet.Profile.Aliases, d.Aliases)
+				-- re-register saved functions as runnable commands
+				if type(d.Functions) == "table" and Karet.Functions then
+					for name, body in d.Functions do
+						if type(name) == "string" and type(body) == "string" then
+							Karet.Functions.set(name, body)
+						end
+					end
+				end
 				if type(d.Vars) == "table" then
 					for k, v in d.Vars do
 						Karet.Env[k] = v
@@ -753,6 +806,7 @@ local function startClient(options: StartConfig)
 					History = Karet.Profile.History,
 					Kavs = Karet.Profile.Kavs,
 					Aliases = Karet.Profile.Aliases,
+					Functions = Karet.Profile.Functions,
 					Vars = Karet.Env,
 					Theme = Karet.Theme.Name() or Karet.Profile.CurrentTheme,
 				} })
@@ -839,6 +893,7 @@ local function startServer(options: StartConfig)
 				Kavs = {},
 				Theme = "",
 				Aliases = {},
+				Functions = {},
 			})
 			Players.PlayerAdded:Connect(function(player)
 				Pik.StartPlayerSession(player).catch(function(err)
@@ -849,7 +904,7 @@ local function startServer(options: StartConfig)
 				Pik.StartPlayerSession(player)
 			end
 			-- the saved fields the client is allowed to read/write
-			local FIELDS = { "History", "Vars", "Kavs", "Theme", "Aliases" }
+			local FIELDS = { "History", "Vars", "Kavs", "Theme", "Aliases", "Functions" }
 			networking:listenProfile(function(payload, player)
 				local stores = Pik.WaitForSession(player)
 				local handle = stores and stores.KaretProfile

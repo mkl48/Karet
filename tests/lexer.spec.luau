@@ -102,6 +102,12 @@ return function(t)
 		Assert.eq(r.tokens[3].line, 2, "second line")
 	end)
 
+	t.test("semicolons lex as their own token", function()
+		local r = Lexer.tokenize("a; b")
+		Assert.eq(kinds(r), { "Ident", "Semicolon", "Ident", "EOF" }, "semicolon kinds")
+		Assert.eq(#r.diagnostics, 0, "no bad-char diagnostic")
+	end)
+
 	t.test("diagnostics: unterminated string and bad char", function()
 		local s = Lexer.tokenize('"oops')
 		Assert.truthy(#s.diagnostics >= 1, "unterminated string flagged")

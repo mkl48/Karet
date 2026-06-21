@@ -92,7 +92,7 @@ export type StartConfig = {
 	Position: UDim2?, -- override the window position
 	Kaveat: boolean?, -- enable the Kaveat editor
 	PromptType: ("text" | "window")?, -- how Dangerous commands confirm: terminal y/N or an Iris modal
-	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases) via Pik DataStores
+	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores
 	Admin: boolean?, -- enable the moderation suite (kick/ban/mute/audit + dashboard)
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	DefaultRole: string?, -- server: default role for players
@@ -468,6 +468,21 @@ local function startClient(options: StartConfig)
 		end,
 	}
 
+	-- re-run a line through the shell (expand aliases, parse, evaluate). shared by the `run`
+	-- service and the function/macro handlers, so it lives outside the services table (a table
+	-- constructor cant reference itself).
+	local function runLine(line: string): any
+		if not Karet.Evaluator then
+			return { ok = false, error = "shell not ready" }
+		end
+		line = Alias.expand(line, Karet.Profile.Aliases)
+		local parsed = Karet.Parse(line)
+		if #parsed.diagnostics > 0 then
+			return { ok = false, error = parsed.diagnostics[1].message }
+		end
+		return Karet.Evaluator:run(parsed.ast)
+	end
+
 	-- Built-in commands (help/clear/echo/theme/...), unless opted out.
 	if options.BuiltIns ~= false then
 		local services = {
@@ -560,23 +575,53 @@ local function startClient(options: StartConfig)
 					return names
 				end,
 			},
-			-- re-run a line through the shell (used by `repc`/`every`). returns the chain result.
-			run = function(line)
-				if not Karet.Evaluator then
-					return { ok = false, error = "shell not ready" }
-				end
-				line = Alias.expand(line, Karet.Profile.Aliases)
-				local parsed = Karet.Parse(line)
-				if #parsed.diagnostics > 0 then
-					return { ok = false, error = parsed.diagnostics[1].message }
-				end
-				return Karet.Evaluator:run(parsed.ast)
-			end,
+			-- named macros, stored on the profile. set() also registers a real command that
+			-- runs the body, so functions appear in help/completion and nest inside each other.
+			functions = {
+				get = function(name)
+					return Karet.Profile.Functions[name]
+				end,
+				set = function(name, body)
+					Karet.Profile.Functions[name] = body
+					registry:register({
+						Name = name,
+						Description = `function: {body}`,
+						Network = "Client",
+						On = { Client = function(ctx)
+							local b = Karet.Profile.Functions[name]
+							if b == nil then
+								return
+							end
+							-- run the body through the shell; bubble up a failure so chains see it
+							local out = runLine(b)
+							if type(out) == "table" and out.ok == false and out.error then
+								ctx.Abort(out.error)
+							end
+						end },
+					})
+				end,
+				unset = function(name)
+					Karet.Profile.Functions[name] = nil
+					registry:unregister(name)
+				end,
+				list = function()
+					local names = {}
+					for k in Karet.Profile.Functions do
+						table.insert(names, k)
+					end
+					table.sort(names)
+					return names
+				end,
+			},
+			-- re-run a line through the shell (used by `repc`/`every`/`watch`). returns the chain result.
+			run = runLine,
 			version = Karet.Version,
 		}
 		for _, def in Commands.build(services) do
 			registry:register(def)
 		end
+		-- expose the function store so persistence-load can re-register saved macros
+		Karet.Functions = services.functions
 	end
 
 	-- Live, editable settings (the @CONFIG editor writes here). Seeded from Start options.
@@ -767,6 +812,14 @@ local function startClient(options: StartConfig)
 				fillArray(Karet.Profile.History, d.History)
 				fillMap(Karet.Profile.Kavs, d.Kavs)
 				fillMap(Karet.Profile.Aliases, d.Aliases)
+				-- re-register saved functions as runnable commands
+				if type(d.Functions) == "table" and Karet.Functions then
+					for name, body in d.Functions do
+						if type(name) == "string" and type(body) == "string" then
+							Karet.Functions.set(name, body)
+						end
+					end
+				end
 				if type(d.Vars) == "table" then
 					for k, v in d.Vars do
 						Karet.Env[k] = v
@@ -785,6 +838,7 @@ local function startClient(options: StartConfig)
 					History = Karet.Profile.History,
 					Kavs = Karet.Profile.Kavs,
 					Aliases = Karet.Profile.Aliases,
+					Functions = Karet.Profile.Functions,
 					Vars = Karet.Env,
 					Theme = Karet.Theme.Name() or Karet.Profile.CurrentTheme,
 				} })
@@ -871,6 +925,7 @@ local function startServer(options: StartConfig)
 				Kavs = {},
 				Theme = "",
 				Aliases = {},
+				Functions = {},
 			})
 			Players.PlayerAdded:Connect(function(player)
 				Pik.StartPlayerSession(player).catch(function(err)
@@ -881,7 +936,7 @@ local function startServer(options: StartConfig)
 				Pik.StartPlayerSession(player)
 			end
 			-- the saved fields the client is allowed to read/write
-			local FIELDS = { "History", "Vars", "Kavs", "Theme", "Aliases" }
+			local FIELDS = { "History", "Vars", "Kavs", "Theme", "Aliases", "Functions" }
 			networking:listenProfile(function(payload, player)
 				local stores = Pik.WaitForSession(player)
 				local handle = stores and stores.KaretProfile
@@ -1561,6 +1616,14 @@ export type Services = {
 		unset: (name: string) -> (),
 		list: () -> { string },
 	}?,
+	-- named multi-statement macros. set() stores the body AND registers a runnable command,
+	-- so a function shows up in help/completion and works inside chains/pipes/other functions.
+	functions: {
+		get: (name: string) -> any,
+		set: (name: string, body: string) -> (),
+		unset: (name: string) -> (),
+		list: () -> { string },
+	}?,
 	version: string,
 }
 
@@ -1985,6 +2048,76 @@ function Commands.build(services: Services): { any }
 				else
 					for _, n in names do
 						ctx.Print(`{n} -> {services.aliases.get(n)}`)
+					end
+				end
+			end },
+		},
+
+		-- ----- functions / macros -----
+
+		{
+			Name = "function",
+			Aliases = { "fn", "def" },
+			Description = 'name a sequence of commands: function hi "echo hello; echo there"  (then run: hi)',
+			Network = "Client",
+			Args = {
+				{ Name = "name", Types = { "String" }, Required = true },
+				{ Name = "body", Types = { "String" }, Required = true },
+			},
+			On = { Client = function(ctx)
+				if not services.functions then
+					return ctx.Err("functions unavailable")
+				end
+				local name = ctx.Args.name
+				-- dont let a function clobber a real command (but redefining a function is fine)
+				if services.get(name) and services.functions.get(name) == nil then
+					return ctx.Err(`'{name}' is already a command`)
+				end
+				services.functions.set(name, ctx.Args.body)
+				ctx.Success(`{name}() defined`)
+			end },
+		},
+
+		{
+			Name = "unfunction",
+			Aliases = { "delfn", "undef" },
+			Description = "remove a function",
+			Network = "Client",
+			Args = { { Name = "name", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				if not services.functions then
+					return ctx.Err("functions unavailable")
+				end
+				if services.functions.get(ctx.Args.name) == nil then
+					return ctx.Warn(`no function '{ctx.Args.name}'`)
+				end
+				services.functions.unset(ctx.Args.name)
+				ctx.Info(`removed function {ctx.Args.name}`)
+			end },
+		},
+
+		{
+			Name = "functions",
+			Aliases = { "fns" },
+			Description = "list defined functions and their bodies",
+			Network = "Client",
+			On = { Client = function(ctx)
+				if not services.functions then
+					return ctx.Err("functions unavailable")
+				end
+				local names = services.functions.list()
+				if #names == 0 then
+					return ctx.Info('no functions (try: function hi "echo hello")')
+				end
+				if ctx.UI.available == true then
+					local rows = {}
+					for _, n in names do
+						table.insert(rows, { n, tostring(services.functions.get(n)) })
+					end
+					ctx.UI.Table({ headers = { "function", "body" }, rows = rows })
+				else
+					for _, n in names do
+						ctx.Print(`{n}() = {services.functions.get(n)}`)
 					end
 				end
 			end },
@@ -2693,6 +2826,62 @@ function Commands.build(services: Services): { any }
 					jobs.remove(id)
 				end)
 				ctx.Success(`job {id} started: every {interval}s {line}`)
+				ctx.Return(id)
+			end },
+		})
+		add({
+			Name = "watch",
+			Aliases = { "onchange" },
+			Description = 'run a command when an expressions value changes: watch health "notify ouch"',
+			Network = "Client",
+			Args = {
+				{ Name = "expr", Types = { "String" }, Required = true },
+				{ Name = "command", Types = { "String" }, Required = true },
+			},
+			Modifiers = {
+				{ Name = "interval", Types = { "Number" }, Default = 0.5, Description = "seconds between polls" },
+			},
+			Flags = {
+				{ Name = "immediate", Short = "i", Description = "also run once right away" },
+			},
+			On = { Client = function(ctx)
+				local interval = math.max(0.1, ctx.Modifiers.interval or 0.5)
+				local expr = ctx.Args.expr
+				local line = ctx.Args.command
+				-- read the watched expression and pull its first return value
+				local function read(): any
+					local r = services.run(expr)
+					if type(r) == "table" and r.returns then
+						return r.returns[1]
+					end
+					return nil
+				end
+				local running = true
+				local id = jobs.add(`watch {expr}: {line}`, function()
+					running = false
+				end)
+				task.spawn(function()
+					local prev = read()
+					if ctx.Flags.immediate then
+						services.run(line)
+					end
+					while running do
+						local t = 0
+						while running and t < interval do
+							t += task.wait()
+						end
+						if not running then
+							break
+						end
+						local cur = read()
+						if cur ~= prev then
+							prev = cur
+							services.run(line)
+						end
+					end
+					jobs.remove(id)
+				end)
+				ctx.Success(`job {id} watching {expr}`)
 				ctx.Return(id)
 			end },
 		})
@@ -24493,6 +24682,7 @@ export type Profile = {
 	History: { string },
 	Kavs: { [string]: string },
 	Aliases: { [string]: string },
+	Functions: { [string]: string },
 }
 
 function Profile.new(name: string?): Profile
@@ -24503,6 +24693,7 @@ function Profile.new(name: string?): Profile
 		History = {},
 		Kavs = {},
 		Aliases = {},
+		Functions = {},
 	}, Profile) :: any
 end
 
@@ -24644,6 +24835,23 @@ function Registry:register(def: Definition): Definition
 		self.aliases[string.lower(alias)] = key
 	end
 	return def
+end
+
+-- Drop a command (and any of its aliases) from the registry. used by the function/macro
+-- system when you redefine or remove a user function. no-op if it isnt registered.
+function Registry:unregister(name: string)
+	local key = string.lower(name)
+	local def = self.commands[key]
+	if not def then
+		return
+	end
+	self.commands[key] = nil
+	for _, alias in def.Aliases or {} do
+		local a = string.lower(alias)
+		if self.aliases[a] == key then
+			self.aliases[a] = nil
+		end
+	end
 end
 
 -- Resolve a name or alias to a definition (case-insensitive).
@@ -26054,6 +26262,8 @@ function Lexer.tokenize(source: string): LexResult
 					kind = Kind.Amp
 				elseif b == 124 then
 					kind = Kind.Pipe
+				elseif b == 59 then
+					kind = Kind.Semicolon
 				elseif b == 62 then
 					kind = Kind.Gt
 				elseif b == 60 then
@@ -26197,7 +26407,8 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 		return nil
 	end
 	local function skipNewlines()
-		while at(K.Newline) do
+		-- a ';' separates statements exactly like a newline does
+		while at(K.Newline) or at(K.Semicolon) do
 			advance()
 		end
 	end
@@ -26677,7 +26888,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 			if chain then
 				table.insert(chains, chain)
 			end
-			if at(K.Newline) then
+			if at(K.Newline) or at(K.Semicolon) then
 				skipNewlines()
 			elseif pos == before then
 				-- no progress: force advance so we never loop forever
@@ -26826,6 +27037,7 @@ local Token = {}
 
 Token.Kind = {
 	Newline = "Newline",
+	Semicolon = "Semicolon", -- ; (statement separator, same role as a newline)
 
 	-- literals / words
 	Number = "Number", -- 5, 3.14

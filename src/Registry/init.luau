@@ -83,6 +83,23 @@ function Registry:register(def: Definition): Definition
 	return def
 end
 
+-- Drop a command (and any of its aliases) from the registry. used by the function/macro
+-- system when you redefine or remove a user function. no-op if it isnt registered.
+function Registry:unregister(name: string)
+	local key = string.lower(name)
+	local def = self.commands[key]
+	if not def then
+		return
+	end
+	self.commands[key] = nil
+	for _, alias in def.Aliases or {} do
+		local a = string.lower(alias)
+		if self.aliases[a] == key then
+			self.aliases[a] = nil
+		end
+	end
+end
+
 -- Resolve a name or alias to a definition (case-insensitive).
 function Registry:get(name: string): Definition?
 	local key = string.lower(name)

@@ -17,6 +17,8 @@ local Commands = fw.get("Commands")
 local function rig(ui)
 	local registry = Registry.new()
 	local state = { cleared = false, theme = nil :: string? }
+	local ev -- forward ref so the `run`/`functions` services can drive the same evaluator
+	local fnStore = {} :: { [string]: string }
 	local services = {
 		clear = function()
 			state.cleared = true
@@ -36,6 +38,38 @@ local function rig(ui)
 		playerName = function()
 			return "Tester"
 		end,
+		-- functions: store the body and register a runnable command (mirrors the real wiring)
+		functions = {
+			get = function(name)
+				return fnStore[name]
+			end,
+			set = function(name, body)
+				fnStore[name] = body
+				registry:register({
+					Name = name,
+					Description = `function: {body}`,
+					Network = "Client",
+					On = { Client = function(ctx)
+						local out = ev:run(Parser.parse(fnStore[name]).ast)
+						if type(out) == "table" and out.ok == false and out.error then
+							ctx.Abort(out.error)
+						end
+					end },
+				})
+			end,
+			unset = function(name)
+				fnStore[name] = nil
+				registry:unregister(name)
+			end,
+			list = function()
+				local names = {}
+				for k in fnStore do
+					table.insert(names, k)
+				end
+				table.sort(names)
+				return names
+			end,
+		},
 		version = "9.9.9",
 	}
 	for _, def in Commands.build(services) do
@@ -54,7 +88,7 @@ local function rig(ui)
 		auth = { defaultRole = "User", allowed = {}, denied = {} },
 		ui = ui,
 	})
-	local ev = Evaluator.new(host)
+	ev = Evaluator.new(host)
 	return {
 		run = function(line)
 			return ev:run(Parser.parse(line).ast)
@@ -164,5 +198,56 @@ return function(t)
 		local k = rig(ui)
 		k.run("themes")
 		Assert.eq(#calls.tables, 1, "themes table drawn")
+	end)
+
+	t.test("function defines a runnable named macro", function()
+		local k = rig()
+		k.run('function hi "echo hello"')
+		k.run("hi")
+		Assert.truthy(string.find(joined(k.out), "hello"), "running the function ran its body")
+	end)
+
+	t.test("function body runs a multi-statement sequence", function()
+		local k = rig()
+		k.run('function two "echo one; echo two"')
+		k.run("two")
+		local text = joined(k.out)
+		Assert.truthy(string.find(text, "one"), "first statement ran")
+		Assert.truthy(string.find(text, "two"), "second statement ran")
+	end)
+
+	t.test("function wont clobber an existing command", function()
+		local k = rig()
+		k.run('function echo "echo nope"')
+		Assert.truthy(string.find(joined(k.out), "already a command"), "explains why")
+		-- echo still behaves like the builtin
+		k.run("echo hi")
+		Assert.truthy(string.find(joined(k.out), "hi"), "builtin echo intact")
+	end)
+
+	t.test("unfunction removes the function", function()
+		local k = rig()
+		k.run('function gone "echo x"')
+		k.run("unfunction gone")
+		local result = k.run("gone")
+		Assert.falsy(result.ok, "function no longer exists")
+	end)
+
+	t.test("functions lists defined functions", function()
+		local k = rig()
+		k.run('function a "echo 1"')
+		k.run('function b "echo 2"')
+		k.run("functions")
+		local text = joined(k.out)
+		Assert.truthy(string.find(text, "a()"), "lists a")
+		Assert.truthy(string.find(text, "b()"), "lists b")
+	end)
+
+	t.test("a function can call another function", function()
+		local k = rig()
+		k.run('function inner "echo deep"')
+		k.run('function outer "inner"')
+		k.run("outer")
+		Assert.truthy(string.find(joined(k.out), "deep"), "nested function ran")
 	end)
 end
