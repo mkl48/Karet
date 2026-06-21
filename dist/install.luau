@@ -389,6 +389,15 @@ local function startClient(options: StartConfig)
 		table.sort(names)
 		return names
 	end))
+	-- command palette (ctrl+shift+p) draws its list straight from the registry
+	terminal.input:setPaletteSource(function()
+		local items = {}
+		for _, name in registry:list() do
+			local d = registry:get(name)
+			table.insert(items, { name = name, detail = (d and d.Description) or "" })
+		end
+		return items
+	end)
 	if options.Toggle then
 		local ok, err = pcall(function()
 			terminal:enableSwitch(options.Toggle)
@@ -35488,6 +35497,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local create = require(script.Parent.create)
 local Defaults = require(script.Parent.Parent.Defaults)
+local Search = require(script.Parent.Search)
 
 local Input = {}
 Input.__index = Input
@@ -35520,6 +35530,9 @@ function Input.new(parent: Instance)
 	self.focused = false
 
 	self.completer = nil :: any
+	self.paletteSource = nil :: (() -> { any })?
+	self.mode = nil :: string? -- nil | "search" (ctrl+r) | "palette" (ctrl+shift+p)
+	self.modeHeader = nil :: string?
 	self.suggestions = {} :: { any }
 	self.signature = nil :: any
 	self.sugIndex = 0
@@ -35622,6 +35635,15 @@ function Input.new(parent: Instance)
 	end)
 	box.FocusLost:Connect(function(enterPressed)
 		self.focused = false
+		-- in a picker, enter accepts the selection, clicking away cancels it
+		if self.mode then
+			if enterPressed then
+				self:submit()
+			else
+				self:exitMode(self.draft)
+			end
+			return
+		end
 		self:hideDropdown()
 		if enterPressed then
 			self:submit()
@@ -35637,6 +35659,12 @@ function Input.new(parent: Instance)
 			box.Text = string.gsub(box.Text, "\t", "")
 			self._settingText = false
 		end
+		-- in a picker the box holds the search query, not a command line
+		if self.mode then
+			self._lastText = box.Text
+			self:updatePicker()
+			return
+		end
 		self:autoPair()
 		self._lastText = box.Text
 		self:updateOverlay()
@@ -35648,6 +35676,39 @@ function Input.new(parent: Instance)
 			return
 		end
 		local key = input.KeyCode
+		local ctrl = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+			or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+		local shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+			or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+
+		-- open the pickers. ctrl+shift+p = command palette, ctrl+r = reverse history search
+		-- (pressing ctrl+r again cycles to an older match)
+		if ctrl and shift and key == Enum.KeyCode.P then
+			self:enterPalette()
+			return
+		elseif ctrl and key == Enum.KeyCode.R then
+			if self.mode == "search" then
+				self:moveSel(1)
+			else
+				self:enterSearch()
+			end
+			return
+		end
+
+		-- while a picker is open, the arrows/tab/esc drive it and nothing else
+		if self.mode then
+			if key == Enum.KeyCode.Escape then
+				self:exitMode(self.draft)
+			elseif key == Enum.KeyCode.Up then
+				self:moveSel(-1)
+			elseif key == Enum.KeyCode.Down then
+				self:moveSel(1)
+			elseif key == Enum.KeyCode.Tab then
+				self:acceptPicker()
+			end
+			return
+		end
+
 		local hasSug = #self.suggestions > 0
 		if key == Enum.KeyCode.Tab and hasSug then
 			self:acceptSuggestion()
@@ -35670,6 +35731,16 @@ function Input:onSubmit(fn: (string) -> ())
 end
 
 function Input:submit()
+	-- enter inside a picker accepts the selection rather than running a command
+	if self.mode then
+		self:acceptPicker()
+		task.defer(function()
+			if self.keepFocus and self.box.Parent then
+				self.box:CaptureFocus()
+			end
+		end)
+		return
+	end
 	local line = self.box.Text
 	self.box.Text = ""
 	self.historyIndex = 0
@@ -35788,7 +35859,7 @@ function Input:renderDropdown()
 	end
 	table.clear(self.sugLabels)
 
-	local show = self.focused and (self.signature ~= nil or #self.suggestions > 0)
+	local show = self.focused and (self.modeHeader ~= nil or self.signature ~= nil or #self.suggestions > 0)
 	self.sugFrame.Visible = show
 	if not show then
 		return
@@ -35801,7 +35872,24 @@ function Input:renderDropdown()
 	local cmd = (p and p.Command) or accent
 	local sel = (p and p.Selection) or Color3.fromRGB(60, 60, 80)
 
-	if self.signature then
+	-- a picker shows its own header (mode + live query) in place of the command signature
+	if self.modeHeader then
+		local header = create("TextLabel", {
+			Name = "PickerHeader",
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 0, 18),
+			Font = FONT,
+			TextSize = 12,
+			RichText = true,
+			Text = `<font color="{rgb(accent)}">{esc(self.modeHeader)}</font>`,
+			TextColor3 = accent,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = 0,
+			ZIndex = 51,
+			Parent = self.sugFrame,
+		}) :: TextLabel
+		table.insert(self.sugLabels, header)
+	elseif self.signature then
 		local parts = { `<font color="{rgb(cmd)}">{esc(self.signature.name)}</font>` }
 		for _, a in self.signature.args do
 			local color = a.current and rgb(accent) or rgb(muted)
@@ -35885,6 +35973,107 @@ function Input:hideDropdown()
 	self.signature = nil
 	self.sugIndex = 0
 	self:renderDropdown()
+end
+
+-- pickers (ctrl+r reverse search, ctrl+shift+p command palette) ------------
+
+function Input:setPaletteSource(fn: () -> { any })
+	self.paletteSource = fn
+end
+
+-- enter a picker: stash whatever was on the line, clear the box (it becomes the query)
+function Input:enterMode(mode: string, promptChar: string)
+	self.draft = self.box.Text
+	self.mode = mode
+	self.sugIndex = 1
+	self.prompt.Text = promptChar
+	self._settingText = true
+	self.box.Text = ""
+	self.box.CursorPosition = 1
+	self._settingText = false
+	self._lastText = ""
+	self:updatePicker()
+end
+
+function Input:enterSearch()
+	self:enterMode("search", "r")
+end
+
+function Input:enterPalette()
+	self:enterMode("palette", "?")
+end
+
+-- leave the picker, dropping `finalText` onto the line (the accepted match, or the draft on
+-- cancel). back to a normal command line.
+function Input:exitMode(finalText: string?)
+	self.mode = nil
+	self.modeHeader = nil
+	self.prompt.Text = PROMPT_TEXT
+	local restore = finalText or ""
+	self._settingText = true
+	self.box.Text = restore
+	self.box.CursorPosition = #restore + 1
+	self._settingText = false
+	self._lastText = restore
+	self:hideDropdown()
+	self:updateOverlay()
+	self:refreshDropdown()
+end
+
+-- rebuild the picker results from the current query (called on every keystroke in a mode)
+function Input:updatePicker()
+	local query = self.box.Text
+	local results: { any } = {}
+	if self.mode == "search" then
+		self.modeHeader = `reverse-search: {query}`
+		for occ = 1, MAX do
+			local line = Search.history(self.history, query, occ)
+			if not line then
+				break
+			end
+			table.insert(results, { text = line, detail = "", insert = line })
+		end
+	elseif self.mode == "palette" then
+		self.modeHeader = "command palette"
+		local items = self.paletteSource and self.paletteSource() or {}
+		local ranked = Search.rank(query, items, function(it)
+			return it.name
+		end)
+		for i, it in ranked do
+			if i > MAX then
+				break
+			end
+			table.insert(results, { text = it.name, detail = it.detail or "", insert = it.name })
+		end
+	end
+	self.suggestions = results
+	self.signature = nil
+	if self.sugIndex < 1 or self.sugIndex > #results then
+		self.sugIndex = #results > 0 and 1 or 0
+	end
+
+	-- draw the query in the overlay (plain, no command colouring), or a hint when empty
+	if query == "" then
+		local muted = self.palette and rgb(self.palette.Muted) or "rgb(120,120,120)"
+		local hint = self.mode == "search" and "search history" or "search commands"
+		self.overlay.Text = `<font color="{muted}">{hint}</font>`
+	else
+		self.overlay.Text = esc(query)
+	end
+	self:renderDropdown()
+end
+
+-- accept the highlighted result: insert a command name (palette, with a trailing space so
+-- you can keep typing args) or drop the matched line back on the prompt (search).
+function Input:acceptPicker()
+	local sug = self.suggestions[self.sugIndex]
+	local chosen: string
+	if sug then
+		chosen = self.mode == "palette" and (sug.insert .. " ") or sug.insert
+	else
+		chosen = self.draft
+	end
+	self:exitMode(chosen)
 end
 
 -- history ------------------------------------------------------------------
@@ -36122,6 +36311,95 @@ function Output:destroy()
 end
 
 return Output
+]])
+mod("Search", _33, [[
+-- pure helpers for the input pickers: fuzzy matching (command palette) and reverse history
+-- search (ctrl+r). no roblox in here so it gets unit tested. the actual overlay lives in Input.
+
+local Search = {}
+
+-- subsequence fuzzy match: do all of `query`s chars appear in `text` in order? returns a
+-- score (higher is better) or nil for no match. consecutive runs and a hit on the very first
+-- char score extra, and shorter candidates edge ahead on a tie.
+function Search.fuzzy(query: string, text: string): number?
+	if query == "" then
+		return 0
+	end
+	local q = string.lower(query)
+	local t = string.lower(text)
+	local qi = 1
+	local score = 0
+	local streak = 0
+	local prev = -2
+	for ti = 1, #t do
+		if qi > #q then
+			break
+		end
+		if string.sub(t, ti, ti) == string.sub(q, qi, qi) then
+			if ti == prev + 1 then
+				streak += 1
+			else
+				streak = 0
+			end
+			score += 10 + streak * 5
+			if ti == 1 then
+				score += 15
+			end
+			prev = ti
+			qi += 1
+		end
+	end
+	if qi <= #q then
+		return nil -- ran out of text before matching every query char
+	end
+	return score - #t * 0.1
+end
+
+-- rank `items` by fuzzy score against `query`, dropping non-matches. `key` pulls the string
+-- to match from each item (defaults to the item itself). stable on ties by that string.
+function Search.rank<T>(query: string, items: { T }, key: ((T) -> string)?): { T }
+	local function textOf(item: T): string
+		return key and key(item) or (item :: any)
+	end
+	local scored = {}
+	for _, item in items do
+		local s = Search.fuzzy(query, textOf(item))
+		if s ~= nil then
+			table.insert(scored, { item = item, score = s, text = textOf(item) })
+		end
+	end
+	table.sort(scored, function(a, b)
+		if a.score == b.score then
+			return a.text < b.text
+		end
+		return a.score > b.score
+	end)
+	local out = {}
+	for _, s in scored do
+		table.insert(out, s.item)
+	end
+	return out
+end
+
+-- reverse history search: the `occurrence`th most-recent line that contains `query` as a
+-- case-insensitive substring. occurrence is 1-based. returns (line, index) or nil.
+function Search.history(history: { string }, query: string, occurrence: number?): (string?, number?)
+	local want = math.max(1, occurrence or 1)
+	local q = string.lower(query)
+	local seen = 0
+	for i = #history, 1, -1 do
+		local line = history[i]
+		if q == "" or string.find(string.lower(line), q, 1, true) then
+			seen += 1
+			if seen == want then
+				return line, i
+			end
+		end
+	end
+	return nil, nil
+end
+
+return Search
 ]])
 mod("create", _33, [[
 -- Tiny declarative Instance builder for the terminal UI.
@@ -37318,5 +37596,5 @@ end
 return deps
 ]])
 
-print("[Karet] installed 106 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 107 modules under ReplicatedStorage.Karet")
 return true

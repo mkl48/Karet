@@ -357,6 +357,15 @@ local function startClient(options: StartConfig)
 		table.sort(names)
 		return names
 	end))
+	-- command palette (ctrl+shift+p) draws its list straight from the registry
+	terminal.input:setPaletteSource(function()
+		local items = {}
+		for _, name in registry:list() do
+			local d = registry:get(name)
+			table.insert(items, { name = name, detail = (d and d.Description) or "" })
+		end
+		return items
+	end)
 	if options.Toggle then
 		local ok, err = pcall(function()
 			terminal:enableSwitch(options.Toggle)
