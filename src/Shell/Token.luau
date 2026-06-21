@@ -32,6 +32,7 @@ Token.Kind = {
 	AmpAmp = "AmpAmp", -- &&
 	PipePipe = "PipePipe", -- ||
 	Amp = "Amp", -- &
+	Pipe = "Pipe", -- | (pipeline: feed one command's output into the next)
 
 	-- comparison
 	EqEq = "EqEq", -- ==

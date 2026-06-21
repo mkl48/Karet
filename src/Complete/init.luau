@@ -8,7 +8,7 @@ local Complete = {}
 -- the bit after the last chain op / newline, thats the command were on
 local function lastSegment(text: string): string
 	local cut = 0
-	for _, pat in { "&&", "||", "&", ";", "\n" } do
+	for _, pat in { "&&", "||", "|", "&", ";", "\n" } do
 		local s = 1
 		while true do
 			local i = string.find(text, pat, s, true)

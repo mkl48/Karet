@@ -249,7 +249,9 @@ end
 
 -- ---- command execution ----
 
-function Evaluator:executeCommand(node: any): any
+-- `pipedInput` is the previous stage's output in a pipeline (a | b); it auto-fills b's first
+-- missing required arg and is exposed to the handler as ctx.Input.
+function Evaluator:executeCommand(node: any, pipedInput: any?): any
 	local host = self.host
 
 	-- lone ambiguous word in a group: command if registered, else a literal string
@@ -270,6 +272,7 @@ function Evaluator:executeCommand(node: any): any
 	if #node.args > #specs then
 		return { ok = false, error = `'{node.name}' takes {#specs} argument(s), got {#node.args}` }
 	end
+	local pipeUsed = false
 	for i, spec in specs do
 		local argNode = node.args[i]
 		if argNode ~= nil then
@@ -283,7 +286,17 @@ function Evaluator:executeCommand(node: any): any
 			end
 			typedArgs[spec.Name] = typed
 		elseif spec.Required then
-			return { ok = false, error = `missing required argument '{spec.Name}'` }
+			-- nothing given: a piped value fills the first missing required arg
+			if pipedInput ~= nil and not pipeUsed then
+				local typed, terr = host.coerce(pipedInput, spec.Types)
+				if terr then
+					return { ok = false, error = `argument '{spec.Name}' (piped): {terr}` }
+				end
+				typedArgs[spec.Name] = typed
+				pipeUsed = true
+			else
+				return { ok = false, error = `missing required argument '{spec.Name}'` }
+			end
 		else
 			typedArgs[spec.Name] = spec.Default
 		end
@@ -326,6 +339,7 @@ function Evaluator:executeCommand(node: any): any
 		args = typedArgs,
 		flags = flags,
 		modifiers = modifiers,
+		input = pipedInput,
 		node = node,
 	})
 
@@ -372,6 +386,19 @@ function Evaluator:executeStatement(node: any): any
 	local k = node.kind
 	if k == N.Command then
 		return self:executeCommand(node)
+	elseif k == N.Pipeline then
+		-- run each stage left to right, threading the previous stage's first return value
+		-- into the next as piped input
+		local input: any = nil
+		local result: any = { ok = true }
+		for _, stage in node.stages do
+			result = self:executeCommand(stage, input)
+			if not result.ok then
+				return result
+			end
+			input = (result.returns and result.returns[1]) or nil
+		end
+		return result
 	elseif k == N.Guarded then
 		local pass, err = self:evalGuard(node.guard)
 		if err then

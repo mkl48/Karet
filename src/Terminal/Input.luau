@@ -233,7 +233,7 @@ function Input:markup(text: string): string
 
 	while pos <= len do
 		local op
-		for _, o in { "&&", "||", "&", ";" } do
+		for _, o in { "&&", "||", "|", "&", ";" } do
 			if string.sub(text, pos, pos + #o - 1) == o then
 				op = o
 				break

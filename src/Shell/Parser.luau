@@ -525,7 +525,22 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 		elseif at(K.Slash) or at(K.SlashSlash) then
 			return { kind = N.ValueStmt, value = parseReference() }
 		elseif at(K.Ident) then
-			return parseCommand()
+			-- a command, possibly the head of a pipeline `a | b | c`
+			local first = parseCommand()
+			if not at(K.Pipe) then
+				return first
+			end
+			local stages = { first }
+			while at(K.Pipe) do
+				advance()
+				if at(K.Ident) then
+					table.insert(stages, parseCommand())
+				else
+					diag("expected a command after '|'")
+					break
+				end
+			end
+			return { kind = N.Pipeline, stages = stages }
 		end
 		local t = cur()
 		diag(`unexpected {t.text ~= "" and t.text or t.kind}`)

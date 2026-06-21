@@ -141,7 +141,7 @@ function Host.new(opts: Options)
 	end
 
 	-- Build ctx, run middleware + the handler, collect returns. Returns (result, control).
-	local function executeLocal(name, def, handlerFn, args, flags, payload, roleInfo, modifiers)
+	local function executeLocal(name, def, handlerFn, args, flags, payload, roleInfo, modifiers, input)
 		local ctx, control = Context.new({
 			player = session.player,
 			command = name,
@@ -149,6 +149,7 @@ function Host.new(opts: Options)
 			args = args,
 			flags = flags,
 			modifiers = modifiers,
+			input = input,
 			isServer = isServer,
 			isClient = isClient,
 			role = roleInfo and roleInfo.role,
@@ -224,7 +225,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no server handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
+			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers, invocation.input)
 			return result
 		end
 
@@ -234,7 +235,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no {network} handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
+			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers, invocation.input)
 			return result
 		elseif network == "Server" then
 			if not networking then
@@ -245,6 +246,7 @@ function Host.new(opts: Options)
 				args = invocation.args,
 				flags = invocation.flags,
 				modifiers = invocation.modifiers,
+				input = invocation.input,
 				payload = nil,
 				rawInput = session.rawInput,
 			})
@@ -253,7 +255,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no client handler` }
 			end
-			local result, control = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
+			local result, control = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers, invocation.input)
 			if not result.ok then
 				return result
 			end
@@ -265,6 +267,7 @@ function Host.new(opts: Options)
 				args = invocation.args,
 				flags = invocation.flags,
 				modifiers = invocation.modifiers,
+				input = invocation.input,
 				payload = control.committed(),
 				rawInput = session.rawInput,
 			})
@@ -309,7 +312,7 @@ function Host.new(opts: Options)
 
 		local prevPlayer, prevRaw, prevOut = session.player, session.rawInput, currentOutput
 		session.player, session.rawInput, currentOutput = player, request.rawInput, {}
-		local result = executeLocal(request.name, def, fn, typedArgs, request.flags or {}, request.payload, roleInfoFor(player), request.modifiers)
+		local result = executeLocal(request.name, def, fn, typedArgs, request.flags or {}, request.payload, roleInfoFor(player), request.modifiers, request.input)
 		result.output = currentOutput
 		session.player, session.rawInput, currentOutput = prevPlayer, prevRaw, prevOut
 		return result

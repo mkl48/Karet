@@ -33,6 +33,7 @@ export type Request = {
 	args: { [string]: any }?, -- resolved (still-to-be-revalidated) args
 	flags: { [string]: boolean }?, -- boolean flag set (-s)
 	modifiers: { [string]: any }?, -- valued long options (--name=value)
+	input: any, -- piped input from a previous pipeline stage
 	payload: any, -- Context command's committed payload, if any
 	rawInput: string?, -- the original line, for audit/re-parse
 }
@@ -56,6 +57,7 @@ function Networking.new()
 				args = Type.any():nullable(),
 				flags = Type.any():nullable(),
 				modifiers = Type.any():nullable(),
+				input = Type.any():nullable(),
 				payload = Type.any():nullable(),
 				rawInput = Type.string():nullable(),
 			})

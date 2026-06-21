@@ -176,6 +176,49 @@ return function(t)
 		Assert.eq(seen.label, "hi", "string option parsed")
 	end)
 
+	t.test("pipes thread the previous command's return into the next", function()
+		local k = rig(function(r)
+			r:register({
+				Name = "echo",
+				Network = "Shared",
+				Args = { { Name = "text", Types = { "String" }, Required = true } },
+				On = { Shared = function(ctx)
+					ctx.Print(ctx.Args.text)
+					ctx.Return(ctx.Args.text)
+				end },
+			})
+			r:register({
+				Name = "shout",
+				Network = "Shared",
+				Args = { { Name = "text", Types = { "String" }, Required = true } },
+				On = { Shared = function(ctx)
+					ctx.Print(string.upper(ctx.Args.text))
+					ctx.Return(string.upper(ctx.Args.text))
+				end },
+			})
+		end)
+		k.run("echo hello | shout")
+		Assert.eq(k.out[#k.out].message, "HELLO", "piped value auto-filled shout's arg")
+	end)
+
+	t.test("pipe input is also on ctx.Input", function()
+		local seen
+		local k = rig(function(r)
+			r:register({
+				Name = "src",
+				Network = "Shared",
+				On = { Shared = function(ctx) ctx.Return(42) end },
+			})
+			r:register({
+				Name = "sink",
+				Network = "Shared",
+				On = { Shared = function(ctx) seen = ctx.Input end },
+			})
+		end)
+		k.run("src | sink")
+		Assert.eq(seen, 42, "ctx.Input carries the piped value")
+	end)
+
 	t.test("declared modifiers apply defaults and coerce to their type", function()
 		local seen
 		local k = rig(function(r)

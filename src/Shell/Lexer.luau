@@ -314,6 +314,8 @@ function Lexer.tokenize(source: string): LexResult
 					kind = Kind.Tilde
 				elseif b == 38 then
 					kind = Kind.Amp
+				elseif b == 124 then
+					kind = Kind.Pipe
 				elseif b == 62 then
 					kind = Kind.Gt
 				elseif b == 60 then

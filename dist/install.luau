@@ -1680,6 +1680,7 @@ function Commands.build(services: Services): { any }
 			Args = { { Name = "text", Types = { "String" }, Required = true } },
 			On = { Client = function(ctx)
 				ctx.Print(ctx.Args.text)
+				ctx.Return(ctx.Args.text)
 			end },
 		},
 
@@ -2928,7 +2929,7 @@ local Complete = {}
 -- the bit after the last chain op / newline, thats the command were on
 local function lastSegment(text: string): string
 	local cut = 0
-	for _, pat in { "&&", "||", "&", ";", "\n" } do
+	for _, pat in { "&&", "||", "|", "&", ";", "\n" } do
 		local s = 1
 		while true do
 			local i = string.find(text, pat, s, true)
@@ -3148,6 +3149,7 @@ export type Options = {
 	args: { [string]: any },
 	flags: { [string]: boolean },
 	modifiers: { [string]: any }?, -- valued long options: --name=value
+	input: any?, -- piped input from the previous pipeline stage (a | b)
 	isServer: boolean,
 	isClient: boolean,
 	role: string?,
@@ -3174,6 +3176,7 @@ export type Context = {
 	Args: { [string]: any },
 	Flags: { [string]: boolean }, -- boolean toggles: -s / -p
 	Modifiers: { [string]: any }, -- valued long options: --name=value
+	Input: any, -- piped input from the previous command (a | b), or nil
 	IsServer: boolean,
 	IsClient: boolean,
 	ExecutedAt: number,
@@ -3217,6 +3220,7 @@ function Context.new(opts: Options): (any, Control)
 		Args = opts.args,
 		Flags = opts.flags,
 		Modifiers = opts.modifiers or {},
+		Input = opts.input,
 		IsServer = opts.isServer,
 		IsClient = opts.isClient,
 		ExecutedAt = os.clock(),
@@ -5429,7 +5433,7 @@ function Host.new(opts: Options)
 	end
 
 	-- Build ctx, run middleware + the handler, collect returns. Returns (result, control).
-	local function executeLocal(name, def, handlerFn, args, flags, payload, roleInfo, modifiers)
+	local function executeLocal(name, def, handlerFn, args, flags, payload, roleInfo, modifiers, input)
 		local ctx, control = Context.new({
 			player = session.player,
 			command = name,
@@ -5437,6 +5441,7 @@ function Host.new(opts: Options)
 			args = args,
 			flags = flags,
 			modifiers = modifiers,
+			input = input,
 			isServer = isServer,
 			isClient = isClient,
 			role = roleInfo and roleInfo.role,
@@ -5512,7 +5517,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no server handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
+			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers, invocation.input)
 			return result
 		end
 
@@ -5522,7 +5527,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no {network} handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
+			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers, invocation.input)
 			return result
 		elseif network == "Server" then
 			if not networking then
@@ -5533,6 +5538,7 @@ function Host.new(opts: Options)
 				args = invocation.args,
 				flags = invocation.flags,
 				modifiers = invocation.modifiers,
+				input = invocation.input,
 				payload = nil,
 				rawInput = session.rawInput,
 			})
@@ -5541,7 +5547,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no client handler` }
 			end
-			local result, control = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
+			local result, control = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers, invocation.input)
 			if not result.ok then
 				return result
 			end
@@ -5553,6 +5559,7 @@ function Host.new(opts: Options)
 				args = invocation.args,
 				flags = invocation.flags,
 				modifiers = invocation.modifiers,
+				input = invocation.input,
 				payload = control.committed(),
 				rawInput = session.rawInput,
 			})
@@ -5597,7 +5604,7 @@ function Host.new(opts: Options)
 
 		local prevPlayer, prevRaw, prevOut = session.player, session.rawInput, currentOutput
 		session.player, session.rawInput, currentOutput = player, request.rawInput, {}
-		local result = executeLocal(request.name, def, fn, typedArgs, request.flags or {}, request.payload, roleInfoFor(player), request.modifiers)
+		local result = executeLocal(request.name, def, fn, typedArgs, request.flags or {}, request.payload, roleInfoFor(player), request.modifiers, request.input)
 		result.output = currentOutput
 		session.player, session.rawInput, currentOutput = prevPlayer, prevRaw, prevOut
 		return result
@@ -21467,6 +21474,7 @@ export type Request = {
 	args: { [string]: any }?, -- resolved (still-to-be-revalidated) args
 	flags: { [string]: boolean }?, -- boolean flag set (-s)
 	modifiers: { [string]: any }?, -- valued long options (--name=value)
+	input: any, -- piped input from a previous pipeline stage
 	payload: any, -- Context command's committed payload, if any
 	rawInput: string?, -- the original line, for audit/re-parse
 }
@@ -21490,6 +21498,7 @@ function Networking.new()
 				args = Type.any():nullable(),
 				flags = Type.any():nullable(),
 				modifiers = Type.any():nullable(),
+				input = Type.any():nullable(),
 				payload = Type.any():nullable(),
 				rawInput = Type.string():nullable(),
 			})
@@ -25234,6 +25243,7 @@ Ast.Kind = {
 	Guarded = "Guarded", -- { guard: Guard, block: Program }
 	Guard = "Guard", -- { terms: { {op: string?, negate: boolean, expr} } }
 	ValueStmt = "ValueStmt", -- { value }  (a bare reference or group used as a statement)
+	Pipeline = "Pipeline", -- { stages: {Command} }  (a | b | c: thread each output into the next)
 
 	-- values / args
 	Literal = "Literal", -- { valueType: "string"|"number"|"boolean"|"nil", value }
@@ -25502,7 +25512,9 @@ end
 
 -- ---- command execution ----
 
-function Evaluator:executeCommand(node: any): any
+-- `pipedInput` is the previous stage's output in a pipeline (a | b); it auto-fills b's first
+-- missing required arg and is exposed to the handler as ctx.Input.
+function Evaluator:executeCommand(node: any, pipedInput: any?): any
 	local host = self.host
 
 	-- lone ambiguous word in a group: command if registered, else a literal string
@@ -25523,6 +25535,7 @@ function Evaluator:executeCommand(node: any): any
 	if #node.args > #specs then
 		return { ok = false, error = `'{node.name}' takes {#specs} argument(s), got {#node.args}` }
 	end
+	local pipeUsed = false
 	for i, spec in specs do
 		local argNode = node.args[i]
 		if argNode ~= nil then
@@ -25536,7 +25549,17 @@ function Evaluator:executeCommand(node: any): any
 			end
 			typedArgs[spec.Name] = typed
 		elseif spec.Required then
-			return { ok = false, error = `missing required argument '{spec.Name}'` }
+			-- nothing given: a piped value fills the first missing required arg
+			if pipedInput ~= nil and not pipeUsed then
+				local typed, terr = host.coerce(pipedInput, spec.Types)
+				if terr then
+					return { ok = false, error = `argument '{spec.Name}' (piped): {terr}` }
+				end
+				typedArgs[spec.Name] = typed
+				pipeUsed = true
+			else
+				return { ok = false, error = `missing required argument '{spec.Name}'` }
+			end
 		else
 			typedArgs[spec.Name] = spec.Default
 		end
@@ -25579,6 +25602,7 @@ function Evaluator:executeCommand(node: any): any
 		args = typedArgs,
 		flags = flags,
 		modifiers = modifiers,
+		input = pipedInput,
 		node = node,
 	})
 
@@ -25625,6 +25649,19 @@ function Evaluator:executeStatement(node: any): any
 	local k = node.kind
 	if k == N.Command then
 		return self:executeCommand(node)
+	elseif k == N.Pipeline then
+		-- run each stage left to right, threading the previous stage's first return value
+		-- into the next as piped input
+		local input: any = nil
+		local result: any = { ok = true }
+		for _, stage in node.stages do
+			result = self:executeCommand(stage, input)
+			if not result.ok then
+				return result
+			end
+			input = (result.returns and result.returns[1]) or nil
+		end
+		return result
 	elseif k == N.Guarded then
 		local pass, err = self:evalGuard(node.guard)
 		if err then
@@ -26015,6 +26052,8 @@ function Lexer.tokenize(source: string): LexResult
 					kind = Kind.Tilde
 				elseif b == 38 then
 					kind = Kind.Amp
+				elseif b == 124 then
+					kind = Kind.Pipe
 				elseif b == 62 then
 					kind = Kind.Gt
 				elseif b == 60 then
@@ -26586,7 +26625,22 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 		elseif at(K.Slash) or at(K.SlashSlash) then
 			return { kind = N.ValueStmt, value = parseReference() }
 		elseif at(K.Ident) then
-			return parseCommand()
+			-- a command, possibly the head of a pipeline `a | b | c`
+			local first = parseCommand()
+			if not at(K.Pipe) then
+				return first
+			end
+			local stages = { first }
+			while at(K.Pipe) do
+				advance()
+				if at(K.Ident) then
+					table.insert(stages, parseCommand())
+				else
+					diag("expected a command after '|'")
+					break
+				end
+			end
+			return { kind = N.Pipeline, stages = stages }
 		end
 		local t = cur()
 		diag(`unexpected {t.text ~= "" and t.text or t.kind}`)
@@ -26795,6 +26849,7 @@ Token.Kind = {
 	AmpAmp = "AmpAmp", -- &&
 	PipePipe = "PipePipe", -- ||
 	Amp = "Amp", -- &
+	Pipe = "Pipe", -- | (pipeline: feed one command's output into the next)
 
 	-- comparison
 	EqEq = "EqEq", -- ==
@@ -35444,7 +35499,7 @@ function Input:markup(text: string): string
 
 	while pos <= len do
 		local op
-		for _, o in { "&&", "||", "&", ";" } do
+		for _, o in { "&&", "||", "|", "&", ";" } do
 			if string.sub(text, pos, pos + #o - 1) == o then
 				op = o
 				break

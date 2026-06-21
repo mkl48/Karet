@@ -166,6 +166,7 @@ function Commands.build(services: Services): { any }
 			Args = { { Name = "text", Types = { "String" }, Required = true } },
 			On = { Client = function(ctx)
 				ctx.Print(ctx.Args.text)
+				ctx.Return(ctx.Args.text)
 			end },
 		},
 

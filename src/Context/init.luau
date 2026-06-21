@@ -54,6 +54,7 @@ export type Options = {
 	args: { [string]: any },
 	flags: { [string]: boolean },
 	modifiers: { [string]: any }?, -- valued long options: --name=value
+	input: any?, -- piped input from the previous pipeline stage (a | b)
 	isServer: boolean,
 	isClient: boolean,
 	role: string?,
@@ -80,6 +81,7 @@ export type Context = {
 	Args: { [string]: any },
 	Flags: { [string]: boolean }, -- boolean toggles: -s / -p
 	Modifiers: { [string]: any }, -- valued long options: --name=value
+	Input: any, -- piped input from the previous command (a | b), or nil
 	IsServer: boolean,
 	IsClient: boolean,
 	ExecutedAt: number,
@@ -123,6 +125,7 @@ function Context.new(opts: Options): (any, Control)
 		Args = opts.args,
 		Flags = opts.flags,
 		Modifiers = opts.modifiers or {},
+		Input = opts.input,
 		IsServer = opts.isServer,
 		IsClient = opts.isClient,
 		ExecutedAt = os.clock(),

@@ -11,6 +11,7 @@ Ast.Kind = {
 	Guarded = "Guarded", -- { guard: Guard, block: Program }
 	Guard = "Guard", -- { terms: { {op: string?, negate: boolean, expr} } }
 	ValueStmt = "ValueStmt", -- { value }  (a bare reference or group used as a statement)
+	Pipeline = "Pipeline", -- { stages: {Command} }  (a | b | c: thread each output into the next)
 
 	-- values / args
 	Literal = "Literal", -- { valueType: "string"|"number"|"boolean"|"nil", value }
