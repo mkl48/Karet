@@ -12,17 +12,18 @@ local deps = require(script.Parent.deps)
 local Capture = require(script.Parent.Capture)
 local create = require(script.Parent.Terminal.create)
 local LuauComplete = require(script.Complete)
+local Defaults = require(script.Parent.Defaults)
 
 local Kaveat = {}
 Kaveat.__index = Kaveat
 
-local FONT = Enum.Font.Code
-local SIZE = 14
-local TOP_H = 26
-local TREE_W = 190
-local OUT_H = 130
-local TAB_H = 26
-local MODE_H = 22
+local FONT = Defaults.Font
+local SIZE = Defaults.Editor.TextSize
+local TOP_H = Defaults.Editor.TopBarHeight
+local TREE_W = Defaults.Editor.TreeWidth
+local OUT_H = Defaults.Editor.OutputHeight
+local TAB_H = Defaults.Editor.TabHeight
+local MODE_H = Defaults.Editor.ModelineHeight
 
 -- the : commands, used for the cmdline autocomplete
 local CMDS = {
@@ -1192,7 +1193,7 @@ end
 
 function Kaveat:setScale(scale: number)
 	if self.scaleObj then
-		self.scaleObj.Scale = math.clamp(scale, 0.6, 2.0)
+		self.scaleObj.Scale = math.clamp(scale, Defaults.Zoom.Min, Defaults.Zoom.Max)
 	end
 end
 

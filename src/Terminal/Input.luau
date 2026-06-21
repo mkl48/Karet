@@ -9,14 +9,15 @@
 local UserInputService = game:GetService("UserInputService")
 
 local create = require(script.Parent.create)
+local Defaults = require(script.Parent.Parent.Defaults)
 
 local Input = {}
 Input.__index = Input
 
-local FONT = Enum.Font.Code
-local TEXT_SIZE = 15
-local PROMPT_TEXT = "›"
-local MAX = 8
+local FONT = Defaults.Font
+local TEXT_SIZE = Defaults.Input.TextSize
+local PROMPT_TEXT = Defaults.Input.Prompt
+local MAX = Defaults.Input.MaxSuggestions
 
 -- auto pairing. type an opener, get the closer for free with the caret in the middle
 local PAIRS = { ["("] = ")", ["["] = "]", ["{"] = "}", ['"'] = '"', ["'"] = "'" }

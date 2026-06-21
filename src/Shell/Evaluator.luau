@@ -293,11 +293,22 @@ function Evaluator:executeCommand(node: any): any
 		return { ok = false, error = ferr }
 	end
 
+	-- valued long options (--name=value): resolve each value expression
+	local options: { [string]: any } = {}
+	for name, valueNode in node.options or {} do
+		local v, oerr = self:evalExpr(valueNode)
+		if oerr then
+			return { ok = false, error = `option '--{name}': {oerr}` }
+		end
+		options[name] = v
+	end
+
 	local result = host.run({
 		name = node.name,
 		definition = def,
 		args = typedArgs,
 		attributes = flags,
+		options = options,
 		node = node,
 	})
 

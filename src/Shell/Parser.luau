@@ -384,6 +384,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 		local nameTok = advance() -- Ident (caller guarantees)
 		local args = {}
 		local flags = {}
+		local options: { [string]: any } = {} -- valued long options: --name=value
 		while true do
 			local k = kind()
 			if
@@ -395,9 +396,29 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 				or k == K.AmpAmp
 				or k == K.PipePipe
 				or k == K.Amp
-				or k == K.MinusMinus
 			then
 				break
+			elseif k == K.MinusMinus then
+				-- "--name=value" is a command option; a bare "--name" is left for the chain
+				-- directive parser (so --Ignore-Errors / --Dry-Run still work unchanged).
+				local nameNx = peek(1)
+				local eqNx = peek(2)
+				if
+					nameNx and nameNx.kind == K.Ident and not nameNx.spaceBefore
+					and eqNx and eqNx.kind == K.Assign and not eqNx.spaceBefore
+				then
+					advance() -- '--'
+					advance() -- name
+					advance() -- '='
+					local val = parseArgument()
+					if val == nil then
+						diag(`expected a value after '--{nameNx.value}='`)
+						break
+					end
+					options[nameNx.value] = val
+				else
+					break
+				end
 			elseif k == K.Minus then
 				local nx = peek(1)
 				if nx and not nx.spaceBefore and nx.kind == K.Ident then
@@ -420,7 +441,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 				table.insert(args, arg)
 			end
 		end
-		return { kind = N.Command, name = nameTok.value, nameToken = nameTok, args = args, flags = flags }
+		return { kind = N.Command, name = nameTok.value, nameToken = nameTok, args = args, flags = flags, options = options }
 	end
 
 	-- ---- guards & blocks ----

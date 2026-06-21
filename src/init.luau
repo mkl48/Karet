@@ -25,6 +25,8 @@ local Profile = require(script.Profile)
 local Complete = require(script.Complete)
 local ContextMod = require(script.Context)
 local Render = require(script.Render)
+local Defaults = require(script.Defaults)
+local WindowManager = require(script.WindowManager)
 
 -- ---------------------------------------------------------------------------
 -- public types (exported so editors autocomplete config + params)
@@ -105,6 +107,14 @@ Karet.Kaveat = Kaveat
 -- The rich-output toolkit (panels, tables, trees, charts, ...). Pure string builders, also
 -- handed to handlers as ctx.UI. Karet.Render.table{...} etc. work anywhere.
 Karet.Render = Render
+
+-- Tunable constants (fonts, sizes, timings, zoom limits, ...). One source of truth for the
+-- magic numbers, reachable from kav scripts and the `defaults` command.
+Karet.Defaults = Defaults
+
+-- Iris-backed windows for commands (ctx.Window). Karet.WindowManager.open{...} also works
+-- directly. Client-only.
+Karet.WindowManager = WindowManager
 
 -- Global key/value cache + named-query service, also reachable from handlers as
 -- ctx.Cache / ctx.Query. One instance per realm.
@@ -339,6 +349,18 @@ local function startClient(options: StartConfig)
 			openConfig = function()
 				Karet.OpenConfig()
 			end,
+			defaults = Karet.Defaults,
+			-- re-run a line through the shell (used by `repc`). returns the chain result.
+			run = function(line)
+				if not Karet.Evaluator then
+					return { ok = false, error = "shell not ready" }
+				end
+				local parsed = Karet.Parse(line)
+				if #parsed.diagnostics > 0 then
+					return { ok = false, error = parsed.diagnostics[1].message }
+				end
+				return Karet.Evaluator:run(parsed.ast)
+			end,
 			version = Karet.Version,
 		}
 		for _, def in Commands.build(services) do
@@ -381,6 +403,11 @@ local function startClient(options: StartConfig)
 			return terminal:indicator(indicatorOpts)
 		end,
 		ui = terminal:ui(),
+		window = function(windowOpts)
+			windowOpts = windowOpts or {}
+			windowOpts.parent = terminal.gui.Parent
+			return WindowManager.open(windowOpts)
+		end,
 		confirm = confirm,
 	})
 	local evaluator = Shell.newEvaluator(host, Karet.Env)

@@ -47,6 +47,7 @@ export type Options = {
 	networking: any?,
 	indicator: ((opts: any) -> any)?, -- terminal indicator factory (client only)
 	ui: ({ [string]: any })?, -- rich-output toolkit (client only)
+	window: ((opts: any) -> any)?, -- Iris window factory (client only)
 	confirm: ((name: string, def: any) -> boolean)?, -- dangerous-command gate (client only)
 }
 
@@ -60,6 +61,7 @@ function Host.new(opts: Options)
 	local query = opts.query
 	local indicator = opts.indicator
 	local ui = opts.ui
+	local window = opts.window
 	local confirm = opts.confirm
 	local isServer = opts.isServer == true
 	local isClient = opts.isClient == true
@@ -139,13 +141,14 @@ function Host.new(opts: Options)
 	end
 
 	-- Build ctx, run middleware + the handler, collect returns. Returns (result, control).
-	local function executeLocal(name, def, handlerFn, args, attributes, payload, roleInfo)
+	local function executeLocal(name, def, handlerFn, args, attributes, payload, roleInfo, options)
 		local ctx, control = Context.new({
 			player = session.player,
 			command = name,
 			rawInput = session.rawInput,
 			args = args,
 			attributes = attributes,
+			options = options,
 			isServer = isServer,
 			isClient = isClient,
 			role = roleInfo and roleInfo.role,
@@ -155,6 +158,7 @@ function Host.new(opts: Options)
 			query = query,
 			indicator = indicator,
 			ui = ui,
+			window = window,
 		})
 
 		for _, pre in hooks.pre do
@@ -220,7 +224,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no server handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player))
+			local result = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player), invocation.options)
 			return result
 		end
 
@@ -230,7 +234,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no {network} handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player))
+			local result = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player), invocation.options)
 			return result
 		elseif network == "Server" then
 			if not networking then
@@ -240,6 +244,7 @@ function Host.new(opts: Options)
 				name = name,
 				args = invocation.args,
 				attributes = invocation.attributes,
+				options = invocation.options,
 				payload = nil,
 				rawInput = session.rawInput,
 			})
@@ -248,7 +253,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no client handler` }
 			end
-			local result, control = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player))
+			local result, control = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player), invocation.options)
 			if not result.ok then
 				return result
 			end
@@ -259,6 +264,7 @@ function Host.new(opts: Options)
 				name = name,
 				args = invocation.args,
 				attributes = invocation.attributes,
+				options = invocation.options,
 				payload = control.committed(),
 				rawInput = session.rawInput,
 			})
@@ -303,7 +309,7 @@ function Host.new(opts: Options)
 
 		local prevPlayer, prevRaw, prevOut = session.player, session.rawInput, currentOutput
 		session.player, session.rawInput, currentOutput = player, request.rawInput, {}
-		local result = executeLocal(request.name, def, fn, typedArgs, request.attributes or {}, request.payload, roleInfoFor(player))
+		local result = executeLocal(request.name, def, fn, typedArgs, request.attributes or {}, request.payload, roleInfoFor(player), request.options)
 		result.output = currentOutput
 		session.player, session.rawInput, currentOutput = prevPlayer, prevRaw, prevOut
 		return result

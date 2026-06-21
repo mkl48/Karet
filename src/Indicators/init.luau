@@ -11,6 +11,7 @@
 -- hands back a no-op with the same shape, so handler code never has to branch on realm.
 
 local Theme = require(script.Parent.Theme)
+local Central = require(script.Parent.Defaults).Indicator
 
 local Indicators = {}
 
@@ -29,15 +30,15 @@ local SPINNERS = {
 }
 
 local DEFAULTS = {
-	width = 24, -- bar cells
-	fill = "█",
-	empty = "─",
-	left = "[",
-	right = "]",
-	spinner = "dots",
-	interval = 0.08, -- seconds between animation frames
-	check = "✓",
-	cross = "✗",
+	width = Central.Width, -- bar cells
+	fill = Central.Fill,
+	empty = Central.Empty,
+	left = Central.Left,
+	right = Central.Right,
+	spinner = Central.Spinner,
+	interval = Central.Interval, -- seconds between animation frames
+	check = Central.Check,
+	cross = Central.Cross,
 }
 
 local function rgb(c: Color3): string

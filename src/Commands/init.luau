@@ -32,6 +32,8 @@ export type Services = {
 		list: () -> { string },
 	}?,
 	openConfig: (() -> ())?,
+	run: ((line: string) -> any)?,
+	defaults: { [string]: any }?,
 	version: string,
 }
 
@@ -272,6 +274,47 @@ function Commands.build(services: Services): { any }
 				end
 				ctx.Info("opening @CONFIG in kaveat (edit values, then :w to apply)")
 				services.openConfig()
+			end },
+		},
+
+		{
+			Name = "defaults",
+			Aliases = { "consts" },
+			Description = "show karet's default constants (fonts, sizes, timings...)",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local d = services.defaults
+				if not d then
+					return ctx.Err("defaults unavailable")
+				end
+				local groups = {}
+				for g in d do
+					table.insert(groups, g)
+				end
+				table.sort(groups)
+				local rows = {}
+				for _, g in groups do
+					local v = d[g]
+					if type(v) == "table" then
+						local keys = {}
+						for k in v do
+							table.insert(keys, k)
+						end
+						table.sort(keys)
+						for _, k in keys do
+							table.insert(rows, { `{g}.{k}`, tostring(v[k]) })
+						end
+					else
+						table.insert(rows, { g, tostring(v) })
+					end
+				end
+				if ctx.UI.available == true then
+					ctx.UI.Table({ headers = { "key", "value" }, rows = rows })
+				else
+					for _, r in rows do
+						ctx.Print(`{r[1]} = {r[2]}`)
+					end
+				end
 			end },
 		},
 
@@ -907,6 +950,44 @@ function Commands.build(services: Services): { any }
 	plain("isodate", "ISO 8601 date-time", function(ctx) ctx.Print(os.date("!%Y-%m-%dT%H:%M:%SZ")) end)
 	plain("epoch", "seconds since the game started", function(ctx) emit(ctx, math.floor(time())) end)
 
+	-- repeat a command ---------------------------------------------------------
+	if services.run then
+		add({
+			Name = "repc",
+			Aliases = { "loop", "rep-cmd" },
+			Description = "run a command N times: repc jump 200  (pace it with --delay=0.5)",
+			Network = "Client",
+			Args = {
+				{ Name = "command", Types = { "String" }, Required = true },
+				{ Name = "times", Types = { "Integer" }, Required = true },
+			},
+			On = { Client = function(ctx)
+				local line = ctx.Args.command
+				local maxTimes = (services.defaults and services.defaults.Repeat.MaxTimes) or 10000
+				local times = math.clamp(ctx.Args.times, 1, maxTimes)
+				local delay = tonumber(ctx.Options.delay) or 0
+				local ind = ctx.Indicator({ type = "progress", label = `{line} x{times}`, total = times })
+				local fails = 0
+				for i = 1, times do
+					local r = services.run(line)
+					if type(r) == "table" and r.ok == false then
+						fails += 1
+					end
+					ind:Set(i)
+					if delay > 0 then
+						task.wait(delay)
+					end
+				end
+				if fails > 0 then
+					ind:Fail(`{line}: ran {times}x, {fails} failed`)
+				else
+					ind:Succeed(`{line}: ran {times}x`)
+				end
+				ctx.Return(times - fails)
+			end },
+		})
+	end
+
 	-- env helpers --------------------------------------------------------------
 	if services.env then
 		local env = services.env
@@ -1022,6 +1103,40 @@ function Commands.build(services: Services): { any }
 			emit(ctx, math.floor(hum.Health))
 		end
 	end)
+
+	-- a windowed control panel - shows off ctx.Window (the Iris WindowManager)
+	add({
+		Name = "controls",
+		Aliases = { "panel" },
+		Description = "open a control-panel window (walkspeed / jump / respawn)",
+		Network = "Client",
+		On = { Client = function(ctx)
+			local plr = services.player and services.player()
+			local w = ctx.Window({ title = "controls" })
+			w:Label("character")
+			local speed = w:Slider("walkspeed", 0, 200, 16)
+			local jump = w:Slider("jumppower", 0, 200, 50)
+			w:Button("apply", function()
+				local char = plr and plr.Character
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if hum then
+					hum.WalkSpeed = speed.get()
+					hum.UseJumpPower = true
+					hum.JumpPower = jump.get()
+				end
+			end)
+			w:Separator()
+			w:Button("respawn", function()
+				if plr then
+					plr:LoadCharacter()
+				end
+			end)
+			w:Button("close", function()
+				w:Close()
+			end)
+			ctx.Info("opened the controls window")
+		end },
+	})
 
 	return defs
 end

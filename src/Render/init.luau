@@ -10,6 +10,7 @@
 -- count (utf8-aware, so box chars line up).
 
 local Theme = require(script.Parent.Theme)
+local Defaults = require(script.Parent.Defaults).Render
 
 local Render = {}
 
@@ -82,7 +83,7 @@ function Render.rule(label: string?, opts: { [string]: any }?): string
 	opts = opts or {}
 	local p = Theme.Get()
 	local color = toColor(opts.color) or p.Border
-	local width = opts.width or 48
+	local width = opts.width or Defaults.RuleWidth
 	local ch = opts.char or "─"
 	if not label or label == "" then
 		return span(string.rep(ch, width), color)
@@ -359,7 +360,7 @@ function Render.barchart(items: { any }, opts: { [string]: any }?): string
 	local fillc = toColor(opts.color) or p.Accent
 	local emptyc = toColor(opts.empty) or p.Muted
 	local vc = toColor(opts.text) or p.Foreground
-	local width = opts.width or 24
+	local width = opts.width or Defaults.BarWidth
 	local fillCh, emptyCh = opts.fill or "█", opts.emptyChar or "░"
 
 	local lw, maxv = 0, opts.max or -math.huge

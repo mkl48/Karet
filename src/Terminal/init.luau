@@ -25,6 +25,7 @@ local Output = require(script.Output)
 local Input = require(script.Input)
 local Indicators = require(script.Parent.Indicators)
 local Render = require(script.Parent.Render)
+local Defaults = require(script.Parent.Defaults)
 
 local Terminal = {}
 Terminal.__index = Terminal
@@ -58,14 +59,14 @@ local OPEN_CONTEXT = "KaretTerminal"
 
 -- Full-window geometry per placement mode. Custom Size/Position in opts override these.
 local PLACEMENTS = {
-	Window = { Anchor = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(640, 340) },
+	Window = { Anchor = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(Defaults.Terminal.WindowWidth, Defaults.Terminal.WindowHeight) },
 	Top = { Anchor = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 8), Size = UDim2.new(1, -16, 0, 320) },
 	Bottom = { Anchor = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(1, -16, 0, 320) },
 }
 
 -- Compact single-line bar geometry. Height grows by RESULT_H when there's a result to show.
-local BAR_H = 34
-local RESULT_H = 24
+local BAR_H = Defaults.Compact.BarHeight
+local RESULT_H = Defaults.Compact.ResultHeight
 local COMPACT_PLACEMENTS = {
 	Top = { Anchor = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 8), Size = UDim2.new(1, -16, 0, BAR_H) },
 	Bottom = { Anchor = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(1, -16, 0, BAR_H) },
@@ -111,7 +112,7 @@ end
 -- zoom (ctrl +/-), scales the whole window via UIScale
 -- ---------------------------------------------------------------------------
 
-local ZOOM_MIN, ZOOM_MAX, ZOOM_STEP = 0.6, 2.0, 0.1
+local ZOOM_MIN, ZOOM_MAX, ZOOM_STEP = Defaults.Zoom.Min, Defaults.Zoom.Max, Defaults.Zoom.Step
 
 function Terminal:setScale(scale: number)
 	if not self.scaleObj then
@@ -417,7 +418,7 @@ function Terminal:buildPromptModal()
 		Name = "Card",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(360, 150),
+		Size = UDim2.fromOffset(Defaults.Prompt.CardWidth, Defaults.Prompt.CardHeight),
 		BorderSizePixel = 0,
 		Children = {
 			create("UICorner", { CornerRadius = UDim.new(0, 10) }),

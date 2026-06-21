@@ -159,6 +159,31 @@ return function(t)
 		Assert.truthy(seen, "flag set true")
 	end)
 
+	t.test("valued long options (--name=value) reach ctx.Options", function()
+		local seen
+		local k = rig(function(r)
+			r:register({
+				Name = "go",
+				Network = "Shared",
+				On = { Shared = function(ctx)
+					seen = ctx.Options
+				end },
+			})
+		end)
+		local result = k.run("go --delay=2 --label=hi")
+		Assert.truthy(result.ok, "ran")
+		Assert.eq(seen.delay, 2, "numeric option parsed")
+		Assert.eq(seen.label, "hi", "string option parsed")
+	end)
+
+	t.test("a bare --directive still works alongside command args", function()
+		local k = rig(greetCommand)
+		-- --Ignore-Errors is a chain directive, not a command option
+		local result = k.run("greet A --Ignore-Errors")
+		Assert.truthy(result.ok, "ran with trailing directive")
+		Assert.eq(k.out[1].message, "hi A", "command still ran")
+	end)
+
 	-- Dangerous commands run through a confirm gate (Start{ PromptType } wires the real one).
 	local function rigConfirm(confirmFn)
 		local registry = Registry.new()
@@ -220,6 +245,28 @@ return function(t)
 		end)
 		k.run("load")
 		Assert.truthy(ok, "indicator calls didn't error")
+	end)
+
+	t.test("ctx.Window is a no-op without Iris/terminal", function()
+		local ok = false
+		local k = rig(function(r)
+			r:register({
+				Name = "win",
+				Network = "Shared",
+				On = { Shared = function(ctx)
+					local w = ctx.Window({ title = "x" })
+					w:Label("hi")
+					local field = w:Input("name", "bob")
+					w:Button("go", function() end)
+					w:Close()
+					-- value-getters return without error too
+					local _ = field.get()
+					ok = true
+				end },
+			})
+		end)
+		k.run("win")
+		Assert.truthy(ok, "window calls didn't error")
 	end)
 
 	t.test("guarded block: assignment guard term binds then runs the block", function()

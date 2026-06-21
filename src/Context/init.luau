@@ -25,12 +25,35 @@ local NOOP_UI = setmetatable({}, { __index = function()
 	return function() end
 end })
 
+-- A no-op window (no Iris / off the terminal). Builders that hand back value-getters return
+-- stubs; everything else is chainable, so ctx.Window code runs without branching on realm.
+local NOOP_HANDLE = { get = function() end, set = function() end }
+local NOOP_WINDOW = setmetatable({
+	Label = function()
+		return NOOP_HANDLE
+	end,
+	Input = function()
+		return NOOP_HANDLE
+	end,
+	Checkbox = function()
+		return NOOP_HANDLE
+	end,
+	Slider = function()
+		return NOOP_HANDLE
+	end,
+}, { __index = function(self)
+	return function()
+		return self
+	end
+end })
+
 export type Options = {
 	player: any?, -- Player or nil (Studio/no-player)
 	command: string,
 	rawInput: string?,
 	args: { [string]: any },
 	attributes: { [string]: boolean },
+	options: { [string]: any }?, -- valued long flags: --name=value
 	isServer: boolean,
 	isClient: boolean,
 	role: string?,
@@ -40,6 +63,7 @@ export type Options = {
 	query: any?, -- the global Karet.Query
 	indicator: ((opts: any) -> any)?, -- builds a terminal indicator (client/terminal only)
 	ui: ({ [string]: any })?, -- the rich-output toolkit (panels/tables/...), terminal only
+	window: ((opts: any) -> any)?, -- opens an Iris window (client only)
 }
 
 export type Control = {
@@ -55,6 +79,7 @@ export type Context = {
 	RawInput: string?,
 	Args: { [string]: any },
 	Attributes: { [string]: boolean },
+	Options: { [string]: any }, -- valued long flags (--name=value)
 	IsServer: boolean,
 	IsClient: boolean,
 	ExecutedAt: number,
@@ -74,6 +99,7 @@ export type Context = {
 	Commit: (payload: any) -> (),
 	Abort: (message: string?) -> (),
 	Indicator: (opts: any) -> any, -- a progress bar / spinner; no-op off the terminal
+	Window: (opts: any) -> any, -- an Iris window; no-op off the terminal
 }
 
 function Context.isAbort(err: any): boolean
@@ -96,6 +122,7 @@ function Context.new(opts: Options): (any, Control)
 		RawInput = opts.rawInput,
 		Args = opts.args,
 		Attributes = opts.attributes,
+		Options = opts.options or {},
 		IsServer = opts.isServer,
 		IsClient = opts.isClient,
 		ExecutedAt = os.clock(),
@@ -157,6 +184,14 @@ function Context.new(opts: Options): (any, Control)
 			return opts.indicator(indicatorOpts or {})
 		end
 		return NOOP_INDICATOR
+	end
+
+	-- Open an Iris window (client only). Off the terminal this returns a no-op window.
+	function ctx.Window(windowOpts: any): any
+		if opts.window then
+			return opts.window(windowOpts or {}) or NOOP_WINDOW
+		end
+		return NOOP_WINDOW
 	end
 
 	-- Cancel mid-handler with a message.

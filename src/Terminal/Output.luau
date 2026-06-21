@@ -4,6 +4,7 @@
 -- applyTheme() re-tint history in place.
 
 local create = require(script.Parent.create)
+local Defaults = require(script.Parent.Parent.Defaults)
 
 local Output = {}
 Output.__index = Output
@@ -13,8 +14,8 @@ export type Line = {
 	group: string, -- a Karet.Theme group name
 }
 
-local FONT = Enum.Font.Code
-local TEXT_SIZE = 15
+local FONT = Defaults.Font
+local TEXT_SIZE = Defaults.Output.TextSize
 
 function Output.new(parent: Instance)
 	local self = setmetatable({}, Output)
