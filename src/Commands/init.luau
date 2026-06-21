@@ -34,6 +34,14 @@ export type Services = {
 	openConfig: (() -> ())?,
 	run: ((line: string) -> any)?,
 	defaults: { [string]: any }?,
+	jobs: { [string]: any }?,
+	logCapture: { [string]: any }?,
+	aliases: {
+		get: (name: string) -> any,
+		set: (name: string, line: string) -> (),
+		unset: (name: string) -> (),
+		list: () -> { string },
+	}?,
 	version: string,
 }
 
@@ -313,6 +321,65 @@ function Commands.build(services: Services): { any }
 				else
 					for _, r in rows do
 						ctx.Print(`{r[1]} = {r[2]}`)
+					end
+				end
+			end },
+		},
+
+		-- ----- aliases -----
+
+		{
+			Name = "alias",
+			Description = "make a command alias: alias ll commands  (then run: ll)",
+			Network = "Client",
+			Args = {
+				{ Name = "name", Types = { "String" }, Required = true },
+				{ Name = "command", Types = { "String" }, Required = true },
+			},
+			On = { Client = function(ctx)
+				if not services.aliases then
+					return ctx.Err("aliases unavailable")
+				end
+				services.aliases.set(ctx.Args.name, ctx.Args.command)
+				ctx.Success(`{ctx.Args.name} -> {ctx.Args.command}`)
+			end },
+		},
+
+		{
+			Name = "unalias",
+			Description = "remove a command alias",
+			Network = "Client",
+			Args = { { Name = "name", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				if not services.aliases then
+					return ctx.Err("aliases unavailable")
+				end
+				services.aliases.unset(ctx.Args.name)
+				ctx.Info(`removed alias {ctx.Args.name}`)
+			end },
+		},
+
+		{
+			Name = "aliases",
+			Description = "list command aliases",
+			Network = "Client",
+			On = { Client = function(ctx)
+				if not services.aliases then
+					return ctx.Err("aliases unavailable")
+				end
+				local names = services.aliases.list()
+				if #names == 0 then
+					return ctx.Info("no aliases (try: alias ll commands)")
+				end
+				if ctx.UI.available == true then
+					local rows = {}
+					for _, n in names do
+						table.insert(rows, { n, tostring(services.aliases.get(n)) })
+					end
+					ctx.UI.Table({ headers = { "alias", "command" }, rows = rows })
+				else
+					for _, n in names do
+						ctx.Print(`{n} -> {services.aliases.get(n)}`)
 					end
 				end
 			end },
@@ -984,6 +1051,106 @@ function Commands.build(services: Services): { any }
 					ind:Succeed(`{line}: ran {times}x`)
 				end
 				ctx.Return(times - fails)
+			end },
+		})
+	end
+
+	-- background jobs ----------------------------------------------------------
+	if services.run and services.jobs then
+		local jobs = services.jobs
+		add({
+			Name = "every",
+			Aliases = { "interval" },
+			Description = "run a command on a loop: every 5s jump  (stop it with: stop <id>)",
+			Network = "Client",
+			Args = {
+				{ Name = "interval", Types = { "Duration" }, Required = true },
+				{ Name = "command", Types = { "String" }, Required = true },
+			},
+			On = { Client = function(ctx)
+				local interval = math.max(0.1, ctx.Args.interval)
+				local line = ctx.Args.command
+				local running = true
+				local id = jobs.add(`every {interval}s: {line}`, function()
+					running = false
+				end)
+				task.spawn(function()
+					while running do
+						services.run(line)
+						local t = 0
+						while running and t < interval do
+							t += task.wait()
+						end
+					end
+					jobs.remove(id)
+				end)
+				ctx.Success(`job {id} started: every {interval}s {line}`)
+				ctx.Return(id)
+			end },
+		})
+		add({
+			Name = "jobs",
+			Description = "list running background jobs",
+			Network = "Client",
+			On = { Client = function(ctx)
+				local list = jobs.list()
+				if #list == 0 then
+					return ctx.Info("no running jobs")
+				end
+				if ctx.UI.available == true then
+					local rows = {}
+					for _, j in list do
+						table.insert(rows, { tostring(j.id), j.label })
+					end
+					ctx.UI.Table({ headers = { "id", "job" }, rows = rows })
+				else
+					for _, j in list do
+						ctx.Print(`{j.id}  {j.label}`)
+					end
+				end
+			end },
+		})
+		add({
+			Name = "stop",
+			Aliases = { "kill" },
+			Description = "stop a job by id, or `stop all`",
+			Network = "Client",
+			Args = { { Name = "id", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				if string.lower(ctx.Args.id) == "all" then
+					jobs.stopAll()
+					return ctx.Success("stopped all jobs")
+				end
+				local id = tonumber(ctx.Args.id)
+				if id and jobs.stop(id) then
+					ctx.Success(`stopped job {id}`)
+				else
+					ctx.Warn(`no job {ctx.Args.id}`)
+				end
+			end },
+		})
+	end
+
+	-- log capture --------------------------------------------------------------
+	if services.logCapture then
+		local lc = services.logCapture
+		add({
+			Name = "logs",
+			Aliases = { "console" },
+			Description = "mirror the game's print/warn/error into the terminal: logs on|off",
+			Network = "Client",
+			Args = { { Name = "mode", Types = { "String" }, Required = false } },
+			On = { Client = function(ctx)
+				local mode = ctx.Args.mode and string.lower(ctx.Args.mode) or (lc.isOn() and "off" or "on")
+				if mode == "on" then
+					lc.on()
+					ctx.Success("log capture on (game print/warn/error -> terminal)")
+				elseif mode == "off" then
+					lc.off()
+					ctx.Info("log capture off")
+				else
+					ctx.Warn("usage: logs on | off")
+				end
 			end },
 		})
 	end

@@ -27,6 +27,7 @@ local ContextMod = require(script.Context)
 local Render = require(script.Render)
 local Defaults = require(script.Defaults)
 local WindowManager = require(script.WindowManager)
+local Alias = require(script.Alias)
 
 -- ---------------------------------------------------------------------------
 -- public types (exported so editors autocomplete config + params)
@@ -291,6 +292,76 @@ local function startClient(options: StartConfig)
 		end
 	end
 
+	-- Background-job registry (drives `every` / `jobs` / `stop`). A job is just a label + a
+	-- cancel function; the command that starts it owns the loop.
+	local jobList: { [number]: { id: number, label: string, cancel: () -> () } } = {}
+	local nextJobId = 0
+	local jobs = {
+		add = function(label: string, cancel: () -> ()): number
+			nextJobId += 1
+			jobList[nextJobId] = { id = nextJobId, label = label, cancel = cancel }
+			return nextJobId
+		end,
+		remove = function(id: number)
+			jobList[id] = nil
+		end,
+		stop = function(id: number): boolean
+			local j = jobList[id]
+			if not j then
+				return false
+			end
+			pcall(j.cancel)
+			jobList[id] = nil
+			return true
+		end,
+		stopAll = function()
+			for id, j in jobList do
+				pcall(j.cancel)
+				jobList[id] = nil
+			end
+		end,
+		list = function()
+			local out = {}
+			for _, j in jobList do
+				table.insert(out, j)
+			end
+			table.sort(out, function(a, b)
+				return a.id < b.id
+			end)
+			return out
+		end,
+	}
+
+	-- Pipe the whole game's print/warn/error stream into the terminal (the `logs` command).
+	local logConn: RBXScriptConnection? = nil
+	local logCapture = {
+		on = function()
+			if logConn then
+				return
+			end
+			logConn = game:GetService("LogService").MessageOut:Connect(function(msg, msgType)
+				local group = "Output"
+				if msgType == Enum.MessageType.MessageError then
+					group = "Error"
+				elseif msgType == Enum.MessageType.MessageWarning then
+					group = "Warn"
+				elseif msgType == Enum.MessageType.MessageInfo then
+					group = "Info"
+				end
+				terminal:print(msg, group)
+			end)
+		end,
+		off = function()
+			if logConn then
+				logConn:Disconnect()
+				logConn = nil
+			end
+		end,
+		isOn = function(): boolean
+			return logConn ~= nil
+		end,
+	}
+
 	-- Built-in commands (help/clear/echo/theme/...), unless opted out.
 	if options.BuiltIns ~= false then
 		local services = {
@@ -350,11 +421,34 @@ local function startClient(options: StartConfig)
 				Karet.OpenConfig()
 			end,
 			defaults = Karet.Defaults,
-			-- re-run a line through the shell (used by `repc`). returns the chain result.
+			jobs = jobs,
+			logCapture = logCapture,
+			-- command aliases, stored on the active profile
+			aliases = {
+				get = function(name)
+					return Karet.Profile.Aliases[name]
+				end,
+				set = function(name, line)
+					Karet.Profile.Aliases[name] = line
+				end,
+				unset = function(name)
+					Karet.Profile.Aliases[name] = nil
+				end,
+				list = function()
+					local names = {}
+					for k in Karet.Profile.Aliases do
+						table.insert(names, k)
+					end
+					table.sort(names)
+					return names
+				end,
+			},
+			-- re-run a line through the shell (used by `repc`/`every`). returns the chain result.
 			run = function(line)
 				if not Karet.Evaluator then
 					return { ok = false, error = "shell not ready" }
 				end
+				line = Alias.expand(line, Karet.Profile.Aliases)
 				local parsed = Karet.Parse(line)
 				if #parsed.diagnostics > 0 then
 					return { ok = false, error = parsed.diagnostics[1].message }
@@ -413,6 +507,7 @@ local function startClient(options: StartConfig)
 	local evaluator = Shell.newEvaluator(host, Karet.Env)
 
 	terminal:onSubmit(function(line: string)
+		line = Alias.expand(line, Karet.Profile.Aliases)
 		local parsed = Karet.Parse(line)
 		if #parsed.diagnostics > 0 then
 			for _, d in parsed.diagnostics do

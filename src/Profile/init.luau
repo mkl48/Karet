@@ -10,6 +10,7 @@ export type Profile = {
 	CurrentTheme: string,
 	History: { string },
 	Kavs: { [string]: string },
+	Aliases: { [string]: string },
 }
 
 function Profile.new(name: string?): Profile
@@ -19,6 +20,7 @@ function Profile.new(name: string?): Profile
 		CurrentTheme = "",
 		History = {},
 		Kavs = {},
+		Aliases = {},
 	}, Profile) :: any
 end
 
