@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkdocs=self.webpackChunkdocs||[]).push([[724],{4410:e=>{e.exports=JSON.parse('{"sourceUrl":"https://github.com/mkl48/Karet/blob/master","baseUrl":"/Karet/","classOrder":["Karet","Context","Registry","Theme","Terminal"],"apiCategories":[]}')}}]);

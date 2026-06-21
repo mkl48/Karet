@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="plugin-moonwave plugin-id-moonwave" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.10.1">
+<title data-rh="true">Theme | Karet</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://mkl48.github.io/Karet/api/Theme"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docusaurus_tag" content="default"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docsearch:docusaurus_tag" content="default"><meta data-rh="true" property="og:title" content="Theme | Karet"><meta data-rh="true" name="description" content="One semantic colorscheme, piped through every Karet surface (terminal, Kaveat editor,
+autocomplete, pickers, windows). A theme is not a set of raw frame colours, it&#x27;s a set of
+semantic highlight **groups** ([Group]) the way a Neovim colorscheme is, so
+`Theme.Set(&quot;gruvbox&quot;)` recolours the whole UI at once.
+
+Authors may define a *partial* palette: any group left out is derived from the ones present
+(Surface lightens Background, Prompt follows Accent, ...), so a minimal theme still produces
+a complete, coherent [Palette]. Reach it as `Karet.Theme`.
+
+```lua
+Karet.Theme.Define(&quot;midnight&quot;, { Background = Color3.fromHex(&quot;0b0e14&quot;), Accent = Color3.fromHex(&quot;7aa2f7&quot;) })
+Karet.Theme.Set(&quot;midnight&quot;)
+```"><meta data-rh="true" property="og:description" content="One semantic colorscheme, piped through every Karet surface (terminal, Kaveat editor,
+autocomplete, pickers, windows). A theme is not a set of raw frame colours, it&#x27;s a set of
+semantic highlight **groups** ([Group]) the way a Neovim colorscheme is, so
+`Theme.Set(&quot;gruvbox&quot;)` recolours the whole UI at once.
+
+Authors may define a *partial* palette: any group left out is derived from the ones present
+(Surface lightens Background, Prompt follows Accent, ...), so a minimal theme still produces
+a complete, coherent [Palette]. Reach it as `Karet.Theme`.
+
+```lua
+Karet.Theme.Define(&quot;midnight&quot;, { Background = Color3.fromHex(&quot;0b0e14&quot;), Accent = Color3.fromHex(&quot;7aa2f7&quot;) })
+Karet.Theme.Set(&quot;midnight&quot;)
+```"><link data-rh="true" rel="canonical" href="https://mkl48.github.io/Karet/api/Theme"><link data-rh="true" rel="alternate" href="https://mkl48.github.io/Karet/api/Theme" hreflang="en"><link data-rh="true" rel="alternate" href="https://mkl48.github.io/Karet/api/Theme" hreflang="x-default"><link rel="stylesheet" href="/Karet/assets/css/styles.5ec48d9a.css">
+<script src="/Karet/assets/js/runtime~main.2ed47ce4.js" defer="defer"></script>
+<script src="/Karet/assets/js/main.2a42f9eb.js" defer="defer"></script>
+</head>
+<body>
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/Karet/"><b class="navbar__title text--truncate">Karet</b></a><a class="navbar__item navbar__link" href="/Karet/docs/intro">Docs</a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/Karet/api/">API</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/mkl48/Karet" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"><div class="navbar__search"><span aria-label="expand searchbar" role="button" class="search-icon" tabindex="0"></span><input id="search_input_react" type="search" placeholder="Loading..." aria-label="Search" class="navbar__search-input search-bar" disabled=""></div></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0 docPageContainer_wNNk"><div class="docPage_Dpn1"><div class="docSidebarContainer_o_re"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/Karet/api/Karet"><span title="​Karet" class="linkLabel_WmDU">​Karet</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/Karet/api/Context"><span title="​Context" class="linkLabel_WmDU">​Context</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/Karet/api/Registry"><span title="​Registry" class="linkLabel_WmDU">​Registry</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" href="/Karet/api/Theme"><span title="​Theme" class="linkLabel_WmDU">​Theme</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/Karet/api/Terminal"><span title="​Terminal" class="linkLabel_WmDU">​Terminal</span></a></li></ul></nav></div></div><main class="docMainContainer_HJE1"><div class="container padding-vert--lg"><div class="row"><div class="col docItemCol_MU3C"><div class="docItemContainer_Wv98"><article><div class="member_J0w1 markdown"><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_oUs_"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><header><h1 class="docTitle_mZRt" style="text-decoration:none"><span style="display:inline-block">Theme</span></h1><div class="luaClassTags_EipM"></div><div>
+<p>
+  One semantic colorscheme, piped through every Karet surface (terminal, Kaveat editor,
+  autocomplete, pickers, windows). A theme is not a set of raw frame colours, it's a set of
+  semantic highlight <strong>groups</strong> (<a href="/Karet/api/Theme#Group">Group</a>) the way a Neovim colorscheme is, so
+  <code>Theme.Set("gruvbox")</code> recolours the whole UI at once.
+</p>
+<p>
+  Authors may define a <em>partial</em> palette: any group left out is derived from the ones present
+  (Surface lightens Background, Prompt follows Accent, ...), so a minimal theme still produces
+  a complete, coherent <a href="/Karet/api/Theme#Palette">Palette</a>. Reach it as <code>Karet.Theme</code>.
+</p>
+<pre class="language-lua"><code class="language-lua">Karet<span class="token punctuation">.</span>Theme<span class="token punctuation">.</span><span class="token function">Define</span><span class="token punctuation">(</span><span class="token string">"midnight"</span><span class="token punctuation">,</span> <span class="token punctuation">{</span> Background <span class="token operator">=</span> Color3<span class="token punctuation">.</span><span class="token function">fromHex</span><span class="token punctuation">(</span><span class="token string">"0b0e14"</span><span class="token punctuation">)</span><span class="token punctuation">,</span> Accent <span class="token operator">=</span> Color3<span class="token punctuation">.</span><span class="token function">fromHex</span><span class="token punctuation">(</span><span class="token string">"7aa2f7"</span><span class="token punctuation">)</span> <span class="token punctuation">}</span><span class="token punctuation">)</span>
+Karet<span class="token punctuation">.</span>Theme<span class="token punctuation">.</span><span class="token function">Set</span><span class="token punctuation">(</span><span class="token string">"midnight"</span><span class="token punctuation">)</span>
+</code></pre>
+</div></header><h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="types">Types<a href="#types" class="hash-link" aria-label="Direct link to Types" title="Direct link to Types" translate="no">​</a></h2><div class="divider_rE5g"></div><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="Group"><code style="text-decoration:none">Group</code><a href="#Group" class="hash-link" aria-label="Direct link to Group" title="Direct link to Group" translate="no">​</a></h3><div class="repositoryDetailsContainer_BPdw"><a class="sourceButton_sEho" href="https://github.com/mkl48/Karet/blob/master/src/Theme/init.luau#L45"><div class="sourceButtonText_Vh0m">&lt;/&gt;</div></a></div><div class="memberString_GwaU"><code class="purple_ieR2">type</code> <code>Group<!-- --> = </code> <code class="blue_P4bS">string</code></div><div>
+<p>
+  One semantic highlight group. The full set covers surfaces (<code>Background</code>, <code>Surface</code>,
+  <code>Foreground</code>, <code>Muted</code>, <code>Border</code>, <code>Selection</code>), accents (<code>Accent</code>, <code>AccentAlt</code>), syntax
+  (<code>Command</code>, <code>Keyword</code>, <code>String</code>, <code>Number</code>, <code>Comment</code>, <code>Operator</code>, <code>Variable</code>, <code>Type</code>, ...),
+  diagnostics (<code>Error</code>, <code>Warn</code>, <code>Info</code>, <code>Hint</code>, <code>Success</code>) and terminal roles (<code>Prompt</code>,
+  <code>Output</code>, ...). See <a href="/Karet/api/Theme#Groups">Theme.Groups</a> for the canonical list.
+</p>
+</div><div class="divider_rE5g"></div><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="Palette"><code style="text-decoration:none">Palette</code><a href="#Palette" class="hash-link" aria-label="Direct link to Palette" title="Direct link to Palette" translate="no">​</a></h3><div class="repositoryDetailsContainer_BPdw"><a class="sourceButton_sEho" href="https://github.com/mkl48/Karet/blob/master/src/Theme/init.luau#L94"><div class="sourceButtonText_Vh0m">&lt;/&gt;</div></a></div><div class="memberString_GwaU"><code class="purple_ieR2">type</code> <code>Palette<!-- --> = </code> <code class="purple_ieR2">{</code><span><code>[</code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="/Karet/api/Theme#Group">Group</a></code><code>]</code></span><code>: </code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="https://developer.roblox.com/en-us/api-reference/datatype/Color3" target="_blank" rel="noopener noreferrer">Color3<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" x="0px" y="0px" viewBox="0 0 100 100" width="15" height="15" class="icon outbound" style="color:gray;vertical-align:middle;margin-left:2px"><path fill="currentColor" d="M18.8,85.1h56l0,0c2.2,0,4-1.8,4-4v-32h-8v28h-48v-48h28v-8h-32l0,0c-2.2,0-4,1.8-4,4v56C14.8,83.3,16.6,85.1,18.8,85.1z"></path> <polygon fill="currentColor" points="45.7,48.7 51.3,54.3 77.2,28.5 77.2,37.2 85.2,37.2 85.2,14.9 62.8,14.9 62.8,22.9 71.5,22.9"></polygon></svg></a></code><code class="purple_ieR2">}</code></div><div>
+<p>
+  A map from <a href="/Karet/api/Theme#Group">Group</a> to colour. May be partial when defining a theme (missing groups are
+  derived); <a href="/Karet/api/Theme#Get">Theme.Get</a> always returns a complete one.
+</p>
+</div><h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="functions">Functions<a href="#functions" class="hash-link" aria-label="Direct link to Functions" title="Direct link to Functions" translate="no">​</a></h2><div class="divider_rE5g"></div><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="Define"><code style="text-decoration:none">Define</code><a href="#Define" class="hash-link" aria-label="Direct link to Define" title="Direct link to Define" translate="no">​</a></h3><div class="repositoryDetailsContainer_BPdw"><a class="sourceButton_sEho" href="https://github.com/mkl48/Karet/blob/master/src/Theme/init.luau#L290"><div class="sourceButtonText_Vh0m">&lt;/&gt;</div></a></div><div class="memberString_GwaU"><code>Theme<!-- -->.</code><code class="green_DgR4">Define</code><code>(</code><div class="inset_uKQm"><div><code>name<!-- -->: </code><code class="blue_P4bS">string</code><code>,</code></div><div><code>palette<!-- -->: </code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="/Karet/api/Theme#Palette">Palette</a></code></div></div><code>) → </code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="/Karet/api/Theme#Palette">Palette</a></code></div><div>
+<p>
+  Define (or redefine) a named theme from a partial palette. Returns the <em>resolved</em> complete
+  palette, so you can pass it straight to <a href="/Karet/api/Theme#Set">Theme.Set</a> or inspect it. Redefining the active
+  theme recolours live.
+</p>
+</div><div class="divider_rE5g"></div><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="Set"><code style="text-decoration:none">Set</code><a href="#Set" class="hash-link" aria-label="Direct link to Set" title="Direct link to Set" translate="no">​</a></h3><div class="repositoryDetailsContainer_BPdw"><a class="sourceButton_sEho" href="https://github.com/mkl48/Karet/blob/master/src/Theme/init.luau#L311"><div class="sourceButtonText_Vh0m">&lt;/&gt;</div></a></div><div class="memberString_GwaU"><code>Theme<!-- -->.</code><code class="green_DgR4">Set</code><code>(</code><code>theme<!-- -->: </code><code class="blue_P4bS">string</code><code class="op_lSLc"> | </code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="/Karet/api/Theme#Palette">Palette</a></code><code>) → </code><code>(</code><code>)</code></div><div>
+<p>
+  Set the active theme by name or by an explicit (partial) palette. Switching fires
+  <a href="/Karet/api/Theme#OnChanged">Theme.OnChanged</a>, so every subscribed surface recolours at once. Errors if a name isn't
+  defined.
+</p>
+</div><div class="divider_rE5g"></div><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="Get"><code style="text-decoration:none">Get</code><a href="#Get" class="hash-link" aria-label="Direct link to Get" title="Direct link to Get" translate="no">​</a></h3><div class="repositoryDetailsContainer_BPdw"><a class="sourceButton_sEho" href="https://github.com/mkl48/Karet/blob/master/src/Theme/init.luau#L334"><div class="sourceButtonText_Vh0m">&lt;/&gt;</div></a></div><div class="memberString_GwaU"><code>Theme<!-- -->.</code><code class="green_DgR4">Get</code><code>(</code><code>group<!-- -->: </code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="/Karet/api/Theme#Group">Group?</a></code><code>) → </code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="/Karet/api/Theme#Palette">Palette</a></code><code class="op_lSLc"> | </code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="https://developer.roblox.com/en-us/api-reference/datatype/Color3" target="_blank" rel="noopener noreferrer">Color3<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" x="0px" y="0px" viewBox="0 0 100 100" width="15" height="15" class="icon outbound" style="color:gray;vertical-align:middle;margin-left:2px"><path fill="currentColor" d="M18.8,85.1h56l0,0c2.2,0,4-1.8,4-4v-32h-8v28h-48v-48h28v-8h-32l0,0c-2.2,0-4,1.8-4,4v56C14.8,83.3,16.6,85.1,18.8,85.1z"></path> <polygon fill="currentColor" points="45.7,48.7 51.3,54.3 77.2,28.5 77.2,37.2 85.2,37.2 85.2,14.9 62.8,14.9 62.8,22.9 71.5,22.9"></polygon></svg></a></code></div><div>
+<p>
+  Read the active palette, or a single group's colour. <code>Theme.Get()</code> returns the full (always
+  complete) palette; <code>Theme.Get("Error")</code> returns that group's <code>Color3</code>.
+</p>
+</div><div class="divider_rE5g"></div><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="Name"><code style="text-decoration:none">Name</code><a href="#Name" class="hash-link" aria-label="Direct link to Name" title="Direct link to Name" translate="no">​</a></h3><div class="repositoryDetailsContainer_BPdw"><a class="sourceButton_sEho" href="https://github.com/mkl48/Karet/blob/master/src/Theme/init.luau#L351"><div class="sourceButtonText_Vh0m">&lt;/&gt;</div></a></div><div class="memberString_GwaU"><code>Theme<!-- -->.</code><code class="green_DgR4">Name</code><code>(</code><code>) → </code><code class="blue_P4bS">string?</code></div><div>
+<p>The name of the active theme, or nil if a raw palette was <a href="/Karet/api/Theme#Set">Theme.Set</a> directly.</p>
+</div><div class="divider_rE5g"></div><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="List"><code style="text-decoration:none">List</code><a href="#List" class="hash-link" aria-label="Direct link to List" title="Direct link to List" translate="no">​</a></h3><div class="repositoryDetailsContainer_BPdw"><a class="sourceButton_sEho" href="https://github.com/mkl48/Karet/blob/master/src/Theme/init.luau#L361"><div class="sourceButtonText_Vh0m">&lt;/&gt;</div></a></div><div class="memberString_GwaU"><code>Theme<!-- -->.</code><code class="green_DgR4">List</code><code>(</code><code>) → </code><code class="purple_ieR2">{</code><code class="blue_P4bS">string</code><code class="purple_ieR2">}</code></div><div>
+<p>Names of all defined themes.</p>
+</div><div class="divider_rE5g"></div><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="Groups"><code style="text-decoration:none">Groups</code><a href="#Groups" class="hash-link" aria-label="Direct link to Groups" title="Direct link to Groups" translate="no">​</a></h3><div class="repositoryDetailsContainer_BPdw"><a class="sourceButton_sEho" href="https://github.com/mkl48/Karet/blob/master/src/Theme/init.luau#L376"><div class="sourceButtonText_Vh0m">&lt;/&gt;</div></a></div><div class="memberString_GwaU"><code>Theme<!-- -->.</code><code class="green_DgR4">Groups</code><code>(</code><code>) → </code><code class="purple_ieR2">{</code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="/Karet/api/Theme#Group">Group</a></code><code class="purple_ieR2">}</code></div><div>
+<p>The canonical list of group names (a copy, so callers can't mutate the source).</p>
+</div><div class="divider_rE5g"></div><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="OnChanged"><code style="text-decoration:none">OnChanged</code><a href="#OnChanged" class="hash-link" aria-label="Direct link to OnChanged" title="Direct link to OnChanged" translate="no">​</a></h3><div class="repositoryDetailsContainer_BPdw"><a class="sourceButton_sEho" href="https://github.com/mkl48/Karet/blob/master/src/Theme/init.luau#L389"><div class="sourceButtonText_Vh0m">&lt;/&gt;</div></a></div><div class="memberString_GwaU"><code>Theme<!-- -->.</code><code class="green_DgR4">OnChanged</code><code>(</code><code>fn<!-- -->: </code><code class="purple_ieR2">(</code><div class="inset_uKQm"><code>palette<!-- -->: </code><code class="blue_P4bS"><a style="text-decoration:underline;color:inherit" href="/Karet/api/Theme#Palette">Palette</a></code><code class="purple_ieR2">,</code></div><div class="inset_uKQm"><code>name<!-- -->: </code><code class="blue_P4bS">string?</code></div><code class="purple_ieR2">)</code><code class="purple_ieR2"> → </code><code class="purple_ieR2">(</code><code class="purple_ieR2">)</code><code>) → </code><code class="purple_ieR2">(</code><code class="purple_ieR2">)</code><code class="purple_ieR2"> → </code><code class="purple_ieR2">(</code><code class="purple_ieR2">)</code></div><div>
+<p>
+  Subscribe to theme changes. The callback fires immediately with the current theme and again
+  on every <a href="/Karet/api/Theme#Set">Theme.Set</a> or redefine. Returns an unsubscribe function. This is how every Karet
+  surface recolours live.
+</p>
+</div></div></article></div><details><summary>Show raw api</summary><pre style="max-width:100%;white-space:pre-wrap">{
+    &quot;functions&quot;: [
+        {
+            &quot;name&quot;: &quot;Define&quot;,
+            &quot;desc&quot;: &quot;Define (or redefine) a named theme from a partial palette. Returns the *resolved* complete\npalette, so you can pass it straight to [Theme.Set] or inspect it. Redefining the active\ntheme recolours live.&quot;,
+            &quot;params&quot;: [
+                {
+                    &quot;name&quot;: &quot;name&quot;,
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;string&quot;
+                },
+                {
+                    &quot;name&quot;: &quot;palette&quot;,
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;Palette&quot;
+                }
+            ],
+            &quot;returns&quot;: [
+                {
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;Palette&quot;
+                }
+            ],
+            &quot;function_type&quot;: &quot;static&quot;,
+            &quot;source&quot;: {
+                &quot;line&quot;: 290,
+                &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+            }
+        },
+        {
+            &quot;name&quot;: &quot;Set&quot;,
+            &quot;desc&quot;: &quot;Set the active theme by name or by an explicit (partial) palette. Switching fires\n[Theme.OnChanged], so every subscribed surface recolours at once. Errors if a name isn&#x27;t\ndefined.&quot;,
+            &quot;params&quot;: [
+                {
+                    &quot;name&quot;: &quot;theme&quot;,
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;string | Palette&quot;
+                }
+            ],
+            &quot;returns&quot;: [],
+            &quot;function_type&quot;: &quot;static&quot;,
+            &quot;source&quot;: {
+                &quot;line&quot;: 311,
+                &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+            }
+        },
+        {
+            &quot;name&quot;: &quot;Get&quot;,
+            &quot;desc&quot;: &quot;Read the active palette, or a single group&#x27;s colour. `Theme.Get()` returns the full (always\ncomplete) palette; `Theme.Get(\&quot;Error\&quot;)` returns that group&#x27;s `Color3`.&quot;,
+            &quot;params&quot;: [
+                {
+                    &quot;name&quot;: &quot;group&quot;,
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;Group?&quot;
+                }
+            ],
+            &quot;returns&quot;: [
+                {
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;Palette | Color3&quot;
+                }
+            ],
+            &quot;function_type&quot;: &quot;static&quot;,
+            &quot;source&quot;: {
+                &quot;line&quot;: 334,
+                &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+            }
+        },
+        {
+            &quot;name&quot;: &quot;Name&quot;,
+            &quot;desc&quot;: &quot;The name of the active theme, or nil if a raw palette was [Theme.Set] directly.&quot;,
+            &quot;params&quot;: [],
+            &quot;returns&quot;: [
+                {
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;string?&quot;
+                }
+            ],
+            &quot;function_type&quot;: &quot;static&quot;,
+            &quot;source&quot;: {
+                &quot;line&quot;: 351,
+                &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+            }
+        },
+        {
+            &quot;name&quot;: &quot;List&quot;,
+            &quot;desc&quot;: &quot;Names of all defined themes.&quot;,
+            &quot;params&quot;: [],
+            &quot;returns&quot;: [
+                {
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;{string}&quot;
+                }
+            ],
+            &quot;function_type&quot;: &quot;static&quot;,
+            &quot;source&quot;: {
+                &quot;line&quot;: 361,
+                &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+            }
+        },
+        {
+            &quot;name&quot;: &quot;Groups&quot;,
+            &quot;desc&quot;: &quot;The canonical list of group names (a copy, so callers can&#x27;t mutate the source).&quot;,
+            &quot;params&quot;: [],
+            &quot;returns&quot;: [
+                {
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;{Group}&quot;
+                }
+            ],
+            &quot;function_type&quot;: &quot;static&quot;,
+            &quot;source&quot;: {
+                &quot;line&quot;: 376,
+                &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+            }
+        },
+        {
+            &quot;name&quot;: &quot;OnChanged&quot;,
+            &quot;desc&quot;: &quot;Subscribe to theme changes. The callback fires immediately with the current theme and again\non every [Theme.Set] or redefine. Returns an unsubscribe function. This is how every Karet\nsurface recolours live.&quot;,
+            &quot;params&quot;: [
+                {
+                    &quot;name&quot;: &quot;fn&quot;,
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;(palette: Palette, name: string?) -&gt; ()&quot;
+                }
+            ],
+            &quot;returns&quot;: [
+                {
+                    &quot;desc&quot;: &quot;&quot;,
+                    &quot;lua_type&quot;: &quot;() -&gt; ()&quot;
+                }
+            ],
+            &quot;function_type&quot;: &quot;static&quot;,
+            &quot;source&quot;: {
+                &quot;line&quot;: 389,
+                &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+            }
+        }
+    ],
+    &quot;properties&quot;: [],
+    &quot;types&quot;: [
+        {
+            &quot;name&quot;: &quot;Group&quot;,
+            &quot;desc&quot;: &quot;One semantic highlight group. The full set covers surfaces (`Background`, `Surface`,\n`Foreground`, `Muted`, `Border`, `Selection`), accents (`Accent`, `AccentAlt`), syntax\n(`Command`, `Keyword`, `String`, `Number`, `Comment`, `Operator`, `Variable`, `Type`, ...),\ndiagnostics (`Error`, `Warn`, `Info`, `Hint`, `Success`) and terminal roles (`Prompt`,\n`Output`, ...). See [Theme.Groups] for the canonical list.&quot;,
+            &quot;lua_type&quot;: &quot;string&quot;,
+            &quot;source&quot;: {
+                &quot;line&quot;: 45,
+                &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+            }
+        },
+        {
+            &quot;name&quot;: &quot;Palette&quot;,
+            &quot;desc&quot;: &quot;A map from [Group] to colour. May be partial when defining a theme (missing groups are\nderived); [Theme.Get] always returns a complete one.&quot;,
+            &quot;lua_type&quot;: &quot;{ [Group]: Color3 }&quot;,
+            &quot;source&quot;: {
+                &quot;line&quot;: 94,
+                &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+            }
+        }
+    ],
+    &quot;name&quot;: &quot;Theme&quot;,
+    &quot;desc&quot;: &quot;One semantic colorscheme, piped through every Karet surface (terminal, Kaveat editor,\nautocomplete, pickers, windows). A theme is not a set of raw frame colours, it&#x27;s a set of\nsemantic highlight **groups** ([Group]) the way a Neovim colorscheme is, so\n`Theme.Set(\&quot;gruvbox\&quot;)` recolours the whole UI at once.\n\nAuthors may define a *partial* palette: any group left out is derived from the ones present\n(Surface lightens Background, Prompt follows Accent, ...), so a minimal theme still produces\na complete, coherent [Palette]. Reach it as `Karet.Theme`.\n\n```lua\nKaret.Theme.Define(\&quot;midnight\&quot;, { Background = Color3.fromHex(\&quot;0b0e14\&quot;), Accent = Color3.fromHex(\&quot;7aa2f7\&quot;) })\nKaret.Theme.Set(\&quot;midnight\&quot;)\n```&quot;,
+    &quot;source&quot;: {
+        &quot;line&quot;: 34,
+        &quot;path&quot;: &quot;src/Theme/init.luau&quot;
+    }
+}</pre></details></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#types" class="table-of-contents__link toc-highlight">Types</a><ul><li><a href="#Group" class="table-of-contents__link toc-highlight">Group</a></li><li><a href="#Palette" class="table-of-contents__link toc-highlight">Palette</a></li></ul></li><li><a href="#functions" class="table-of-contents__link toc-highlight">Functions</a><ul><li><a href="#Define" class="table-of-contents__link toc-highlight">.Define</a></li><li><a href="#Get" class="table-of-contents__link toc-highlight">.Get</a></li><li><a href="#Groups" class="table-of-contents__link toc-highlight">.Groups</a></li><li><a href="#List" class="table-of-contents__link toc-highlight">.List</a></li><li><a href="#Name" class="table-of-contents__link toc-highlight">.Name</a></li><li><a href="#OnChanged" class="table-of-contents__link toc-highlight">.OnChanged</a></li><li><a href="#Set" class="table-of-contents__link toc-highlight">.Set</a></li></ul></li></ul></div></div></div></div></main></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 mkl48. Built with Moonwave.</div></div></div></footer></div>
+</body>
+</html>
