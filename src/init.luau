@@ -28,6 +28,7 @@ local Render = require(script.Render)
 local Defaults = require(script.Defaults)
 local WindowManager = require(script.WindowManager)
 local Alias = require(script.Alias)
+local Extensions = require(script.Extensions)
 
 -- ---------------------------------------------------------------------------
 -- public types (exported so editors autocomplete config + params)
@@ -117,6 +118,53 @@ Karet.Defaults = Defaults
 -- Iris-backed windows for commands (ctx.Window). Karet.WindowManager.open{...} also works
 -- directly. Client-only.
 Karet.WindowManager = WindowManager
+
+-- ---------------------------------------------------------------------------
+-- extension platform - register commands, types, and dockable panels so tools
+-- (yours or third-party) plug into the same shell. `panels` / `open` surface them.
+-- ---------------------------------------------------------------------------
+
+local extensions = Extensions.new()
+Karet.Extensions = extensions
+
+-- Register a dockable panel (a named view, usually built with ctx.Window inside Open).
+function Karet.RegisterPanel(panel: Extensions.Panel): Extensions.Panel
+	return extensions:registerPanel(panel)
+end
+
+-- Register a whole extension: its Commands + Types are wired into Karet, its Panels become
+-- openable, and Init(Karet) runs once. The unit that makes Karet a platform.
+function Karet.RegisterExtension(ext: Extensions.Extension): Extensions.Extension
+	assert(type(ext) == "table" and type(ext.Name) == "string" and ext.Name ~= "", "Karet.RegisterExtension: needs a Name")
+	if ext.Types then
+		for name, def in ext.Types do
+			types:Define(name, def)
+		end
+	end
+	local commandNames = {}
+	if ext.Commands then
+		for _, def in ext.Commands do
+			registry:register(def)
+			table.insert(commandNames, def.Name)
+		end
+	end
+	local panelNames = {}
+	if ext.Panels then
+		for _, panel in ext.Panels do
+			extensions:registerPanel(panel)
+			table.insert(panelNames, panel.Name)
+		end
+	end
+	extensions:addExtension({ Name = ext.Name, Description = ext.Description, Commands = commandNames, Panels = panelNames })
+	if type(ext.Init) == "function" then
+		task.spawn(ext.Init, Karet)
+	end
+	return ext
+end
+
+function Karet.Panels(): { Extensions.Panel }
+	return extensions:listPanels()
+end
 
 -- Global key/value cache + named-query service, also reachable from handlers as
 -- ctx.Cache / ctx.Query. One instance per realm.
@@ -424,6 +472,17 @@ local function startClient(options: StartConfig)
 			defaults = Karet.Defaults,
 			jobs = jobs,
 			logCapture = logCapture,
+			panels = {
+				list = function()
+					return extensions:listPanels()
+				end,
+				get = function(name)
+					return extensions:getPanel(name)
+				end,
+			},
+			extensions = function()
+				return extensions:listExtensions()
+			end,
 			-- command aliases, stored on the active profile
 			aliases = {
 				get = function(name)
@@ -675,6 +734,27 @@ local function startClient(options: StartConfig)
 			end
 		end)
 	end
+
+	-- built-in panels (client only), so `panels` / `open` show something out of the box and
+	-- demonstrate the platform other tools register through.
+	Karet.RegisterPanel({
+		Name = "theme",
+		Description = "live theme switcher",
+		Open = function(ctx)
+			local w = ctx.Window({ title = "themes" })
+			w:Label("pick a theme")
+			for _, name in Karet.Theme.List() do
+				w:Button(name, function()
+					Karet.Theme.Set(name)
+					Karet.Profile.CurrentTheme = name
+				end)
+			end
+			w:Separator()
+			w:Button("close", function()
+				w:Close()
+			end)
+		end,
+	})
 
 	Karet.Active = terminal
 	Karet.Host = host

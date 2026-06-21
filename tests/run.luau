@@ -18,6 +18,7 @@ local specs = {
 	{ name = "Complete", spec = require("./complete.spec") },
 	{ name = "KaveatComplete", spec = require("./kaveatcomplete.spec") },
 	{ name = "Alias", spec = require("./alias.spec") },
+	{ name = "Extensions", spec = require("./extensions.spec") },
 }
 
 local t = Harness.new()

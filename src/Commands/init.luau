@@ -34,6 +34,11 @@ export type Services = {
 	openConfig: (() -> ())?,
 	run: ((line: string) -> any)?,
 	defaults: { [string]: any }?,
+	panels: {
+		list: () -> { any },
+		get: (name: string) -> any?,
+	}?,
+	extensions: (() -> { any })?,
 	jobs: { [string]: any }?,
 	logCapture: { [string]: any }?,
 	aliases: {
@@ -331,6 +336,81 @@ function Commands.build(services: Services): { any }
 				else
 					for _, r in rows do
 						ctx.Print(`{r[1]} = {r[2]}`)
+					end
+				end
+			end },
+		},
+
+		-- ----- extension platform -----
+
+		{
+			Name = "panels",
+			Description = "list registered panels (open one with: open <name>)",
+			Network = "Client",
+			On = { Client = function(ctx)
+				if not services.panels then
+					return ctx.Err("panels unavailable")
+				end
+				local list = services.panels.list()
+				if #list == 0 then
+					return ctx.Info("no panels registered")
+				end
+				if ctx.UI.available == true then
+					local rows = {}
+					for _, p in list do
+						table.insert(rows, { p.Name, p.Description or "" })
+					end
+					ctx.UI.Table({ headers = { "panel", "description" }, rows = rows })
+				else
+					for _, p in list do
+						ctx.Print(`{p.Name}  {p.Description or ""}`)
+					end
+				end
+			end },
+		},
+
+		{
+			Name = "open",
+			Description = "open a registered panel: open theme",
+			Network = "Client",
+			Args = { { Name = "name", Types = { "String" }, Required = true } },
+			On = { Client = function(ctx)
+				if not services.panels then
+					return ctx.Err("panels unavailable")
+				end
+				local panel = services.panels.get(ctx.Args.name)
+				if not panel then
+					return ctx.Err(`no panel '{ctx.Args.name}' (try: panels)`)
+				end
+				local ok, err = pcall(panel.Open, ctx)
+				if not ok then
+					ctx.Err(`panel '{ctx.Args.name}' errored: {tostring(err)}`)
+				end
+			end },
+		},
+
+		{
+			Name = "extensions",
+			Aliases = { "ext" },
+			Description = "list installed extensions",
+			Network = "Client",
+			On = { Client = function(ctx)
+				if not services.extensions then
+					return ctx.Err("extensions unavailable")
+				end
+				local list = services.extensions()
+				if #list == 0 then
+					return ctx.Info("no extensions installed")
+				end
+				if ctx.UI.available == true then
+					local rows = {}
+					for _, e in list do
+						table.insert(rows, { e.Name, tostring(#(e.Commands or {})), tostring(#(e.Panels or {})), e.Description or "" })
+					end
+					ctx.UI.Table({ headers = { "extension", "cmds", "panels", "description" }, rows = rows })
+				else
+					for _, e in list do
+						ctx.Print(`{e.Name}  {e.Description or ""}`)
 					end
 				end
 			end },

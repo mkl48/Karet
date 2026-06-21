@@ -23,6 +23,7 @@ local FILES = {
 	Complete = "src/Complete/init.luau",
 	KaveatComplete = "src/Kaveat/Complete.luau",
 	Alias = "src/Alias/init.luau",
+	Extensions = "src/Extensions/init.luau",
 	deps = "src/deps.luau",
 }
 
