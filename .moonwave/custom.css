@@ -15,15 +15,18 @@
   --ifm-line-height-base: 1.65;
 }
 
-/* the brand title in the navbar reads as a terminal prompt */
+/* the brand wordmark sits next to the diamond logo, in the mono face */
 .navbar__title {
   font-family: var(--ifm-font-family-monospace);
   font-weight: 700;
   letter-spacing: -0.02em;
 }
-.navbar__title::before {
-  content: "› ";
-  color: var(--ifm-color-primary);
+.navbar__logo {
+  height: 1.75rem;
+}
+.navbar__logo img {
+  /* a touch of glow so the mark pops on the translucent navbar */
+  filter: drop-shadow(0 0 6px rgba(122, 162, 247, 0.25));
 }
 
 h1,

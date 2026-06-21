@@ -19,6 +19,12 @@ projectName = "Karet"
 url = "https://mkl48.github.io"
 baseUrl = "/Karet/"
 tagline = "an in-game command framework and terminal for Roblox"
+favicon = "favicon.png"
+
+# the navbar mark (the transparent logo reads on both the dark and light navbar)
+[navbar.logo]
+alt = "Karet"
+src = "logo.png"
 
 [home]
 enabled = true
