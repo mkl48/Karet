@@ -102,13 +102,22 @@ function Complete.build(registry: any, types: any, envList: (() -> { string })?)
 		end
 		local partial = trailingSpace and "" or words[#words]
 
-		if string.sub(partial, 1, 1) == "-" then
+		-- "--name" -> declared modifiers (valued long options); "-x" -> boolean flags
+		if string.sub(partial, 1, 2) == "--" then
+			local p = string.lower(string.sub(partial, 3))
+			for _, mod in def.Modifiers or {} do
+				if string.sub(string.lower(mod.Name), 1, #p) == p then
+					table.insert(out, { text = `--{mod.Name}=`, detail = mod.Description or (mod.Types and table.concat(mod.Types, "|")) or "modifier", insert = `--{mod.Name}=` })
+				end
+			end
+			return out
+		elseif string.sub(partial, 1, 1) == "-" then
 			local p = string.lower((string.gsub(partial, "^%-+", "")))
-			for _, attr in def.Attributes or {} do
-				local short = attr.Short
-				if string.sub(string.lower(attr.Name), 1, #p) == p or (short and string.lower(short) == p) then
-					local flag = "-" .. (short or attr.Name)
-					table.insert(out, { text = flag, detail = attr.Description or attr.Name, insert = flag })
+			for _, flag in def.Flags or {} do
+				local short = flag.Short
+				if string.sub(string.lower(flag.Name), 1, #p) == p or (short and string.lower(short) == p) then
+					local f = "-" .. (short or flag.Name)
+					table.insert(out, { text = f, detail = flag.Description or flag.Name, insert = f })
 				end
 			end
 			return out

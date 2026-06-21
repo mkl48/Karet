@@ -384,7 +384,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 		local nameTok = advance() -- Ident (caller guarantees)
 		local args = {}
 		local flags = {}
-		local options: { [string]: any } = {} -- valued long options: --name=value
+		local modifiers: { [string]: any } = {} -- valued long options: --name=value
 		while true do
 			local k = kind()
 			if
@@ -399,7 +399,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 			then
 				break
 			elseif k == K.MinusMinus then
-				-- "--name=value" is a command option; a bare "--name" is left for the chain
+				-- "--name=value" is a command modifier; a bare "--name" is left for the chain
 				-- directive parser (so --Ignore-Errors / --Dry-Run still work unchanged).
 				local nameNx = peek(1)
 				local eqNx = peek(2)
@@ -415,7 +415,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 						diag(`expected a value after '--{nameNx.value}='`)
 						break
 					end
-					options[nameNx.value] = val
+					modifiers[nameNx.value] = val
 				else
 					break
 				end
@@ -441,7 +441,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 				table.insert(args, arg)
 			end
 		end
-		return { kind = N.Command, name = nameTok.value, nameToken = nameTok, args = args, flags = flags, options = options }
+		return { kind = N.Command, name = nameTok.value, nameToken = nameTok, args = args, flags = flags, modifiers = modifiers }
 	end
 
 	-- ---- guards & blocks ----

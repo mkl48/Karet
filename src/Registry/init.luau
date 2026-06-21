@@ -4,7 +4,8 @@
 -- A definition is the canonical record from DESIGN → Command definition:
 --   { Name, Aliases?, Description?, Network?, Permission?,
 --     Args = { { Name, Types, Required?, Default? }, ... },
---     Attributes = { { Name, Short?, Description? }, ... },
+--     Flags = { { Name, Short?, Description? }, ... },        -- boolean -s toggles
+--     Modifiers = { { Name, Types?, Default?, Description? }, ... }, -- --name=value
 --     Returns = { { Name, Type }, ... },
 --     On = { Client?, Server?, Shared? } }
 
@@ -15,7 +16,10 @@ export type NetworkKind = "Shared" | "Client" | "Server" | "Context"
 export type Handler = (ctx: any, payload: any?) -> ()
 
 export type Arg = { Name: string, Types: { string }, Required: boolean?, Default: any? }
-export type Attribute = { Name: string, Short: string?, Description: string? }
+-- boolean toggles: -s / -p (stackable shorts), declared per command
+export type Flag = { Name: string, Short: string?, Description: string? }
+-- valued long options: --delay=2 / --label=hi, optionally typed + defaulted
+export type Modifier = { Name: string, Types: { string }?, Default: any?, Description: string? }
 export type Return = { Name: string, Type: string }
 
 export type Definition = {
@@ -26,7 +30,8 @@ export type Definition = {
 	Permission: string?,
 	Dangerous: boolean?, -- prompt for confirmation before running (see Start{ PromptType })
 	Args: { Arg }?,
-	Attributes: { Attribute }?,
+	Flags: { Flag }?,
+	Modifiers: { Modifier }?,
 	Returns: { Return }?,
 	On: { Client: Handler?, Server: Handler?, Shared: Handler? }?,
 }
@@ -39,7 +44,8 @@ export type Builder = {
 	Permission: (self: Builder, role: string) -> Builder,
 	Dangerous: (self: Builder, flag: boolean?) -> Builder,
 	Arg: (self: Builder, arg: Arg) -> Builder,
-	Attribute: (self: Builder, attr: Attribute) -> Builder,
+	Flag: (self: Builder, flag: Flag) -> Builder,
+	Modifier: (self: Builder, modifier: Modifier) -> Builder,
 	Return: (self: Builder, ret: Return) -> Builder,
 	On: (self: Builder, realm: NetworkKind, handler: Handler) -> Builder,
 	Register: (self: Builder) -> Definition,
@@ -112,7 +118,7 @@ Builder.__index = Builder
 function Registry:command(name: string): Builder
 	return setmetatable({
 		registry = self,
-		def = { Name = name, Aliases = {}, Args = {}, Attributes = {}, Returns = {}, On = {} } :: Definition,
+		def = { Name = name, Aliases = {}, Args = {}, Flags = {}, Modifiers = {}, Returns = {}, On = {} } :: Definition,
 	}, Builder) :: any
 end
 
@@ -149,8 +155,13 @@ function Builder:Arg(arg: Arg)
 	return self
 end
 
-function Builder:Attribute(attr: Attribute)
-	table.insert(self.def.Attributes, attr)
+function Builder:Flag(flag: Flag)
+	table.insert(self.def.Flags, flag)
+	return self
+end
+
+function Builder:Modifier(modifier: Modifier)
+	table.insert(self.def.Modifiers, modifier)
 	return self
 end
 

@@ -15,7 +15,7 @@ local function rig()
 		Name = "ban",
 		Network = "Shared",
 		Args = { { Name = "dur", Types = { "Duration" }, Required = true } },
-		Attributes = { { Name = "silent", Short = "s" }, { Name = "permanent", Short = "p" } },
+		Flags = { { Name = "silent", Short = "s" }, { Name = "permanent", Short = "p" } },
 		On = { Shared = noop },
 	})
 	r:register({ Name = "bandage", Network = "Shared", On = { Shared = noop } })

@@ -15,7 +15,8 @@
 -- A command definition's relevant fields:
 --   Args  = { { Name, Types: {string}, Required: boolean?, Default: any? }, ... }
 --   Returns = { { Name, Type }, ... }
---   Attributes = { { Name, Short }, ... }
+--   Flags = { { Name, Short }, ... }                 -- boolean -s toggles
+--   Modifiers = { { Name, Types?, Default? }, ... }  -- --name=value
 
 local ReturnPool = require(script.Parent.ReturnPool)
 local Ast = require(script.Parent.Ast)
@@ -288,27 +289,43 @@ function Evaluator:executeCommand(node: any): any
 		end
 	end
 
-	local flags, ferr = resolveFlags(node.flags, def.Attributes)
+	local flags, ferr = resolveFlags(node.flags, def.Flags)
 	if ferr then
 		return { ok = false, error = ferr }
 	end
 
-	-- valued long options (--name=value): resolve each value expression
-	local options: { [string]: any } = {}
-	for name, valueNode in node.options or {} do
+	-- modifiers (--name=value). seed declared defaults, then resolve each passed value; if the
+	-- command declares the modifier with Types, coerce against them, else keep it raw.
+	local modifiers: { [string]: any } = {}
+	local modSpecs: { [string]: any } = {}
+	for _, spec in def.Modifiers or {} do
+		modSpecs[spec.Name] = spec
+		if spec.Default ~= nil then
+			modifiers[spec.Name] = spec.Default
+		end
+	end
+	for name, valueNode in node.modifiers or {} do
 		local v, oerr = self:evalExpr(valueNode)
 		if oerr then
-			return { ok = false, error = `option '--{name}': {oerr}` }
+			return { ok = false, error = `modifier '--{name}': {oerr}` }
 		end
-		options[name] = v
+		local spec = modSpecs[name]
+		if spec and spec.Types then
+			local typed, terr = host.coerce(v, spec.Types)
+			if terr then
+				return { ok = false, error = `modifier '--{name}': {terr}` }
+			end
+			v = typed
+		end
+		modifiers[name] = v
 	end
 
 	local result = host.run({
 		name = node.name,
 		definition = def,
 		args = typedArgs,
-		attributes = flags,
-		options = options,
+		flags = flags,
+		modifiers = modifiers,
 		node = node,
 	})
 

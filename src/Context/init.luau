@@ -52,8 +52,8 @@ export type Options = {
 	command: string,
 	rawInput: string?,
 	args: { [string]: any },
-	attributes: { [string]: boolean },
-	options: { [string]: any }?, -- valued long flags: --name=value
+	flags: { [string]: boolean },
+	modifiers: { [string]: any }?, -- valued long options: --name=value
 	isServer: boolean,
 	isClient: boolean,
 	role: string?,
@@ -78,8 +78,8 @@ export type Context = {
 	Command: string,
 	RawInput: string?,
 	Args: { [string]: any },
-	Attributes: { [string]: boolean },
-	Options: { [string]: any }, -- valued long flags (--name=value)
+	Flags: { [string]: boolean }, -- boolean toggles: -s / -p
+	Modifiers: { [string]: any }, -- valued long options: --name=value
 	IsServer: boolean,
 	IsClient: boolean,
 	ExecutedAt: number,
@@ -121,8 +121,8 @@ function Context.new(opts: Options): (any, Control)
 		Command = opts.command,
 		RawInput = opts.rawInput,
 		Args = opts.args,
-		Attributes = opts.attributes,
-		Options = opts.options or {},
+		Flags = opts.flags,
+		Modifiers = opts.modifiers or {},
 		IsServer = opts.isServer,
 		IsClient = opts.isClient,
 		ExecutedAt = os.clock(),

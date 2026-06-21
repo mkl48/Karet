@@ -83,19 +83,29 @@ function Commands.build(services: Services): { any }
 								end
 								ctx.UI.Table({ headers = { "argument", "types" }, rows = rows })
 							end
-							if def.Attributes and #def.Attributes > 0 then
+							if def.Flags and #def.Flags > 0 then
 								local rows = {}
-								for _, attr in def.Attributes do
-									table.insert(rows, { "-" .. (attr.Short or attr.Name), attr.Description or attr.Name })
+								for _, flag in def.Flags do
+									table.insert(rows, { "-" .. (flag.Short or flag.Name), flag.Description or flag.Name })
 								end
 								ctx.UI.Table({ headers = { "flag", "description" }, rows = rows })
+							end
+							if def.Modifiers and #def.Modifiers > 0 then
+								local rows = {}
+								for _, mod in def.Modifiers do
+									table.insert(rows, { `--{mod.Name}=`, (mod.Types and table.concat(mod.Types, " | ")) or "any", mod.Description or "" })
+								end
+								ctx.UI.Table({ headers = { "modifier", "types", "description" }, rows = rows })
 							end
 						else
 							for _, arg in def.Args or {} do
 								ctx.Info(`  <{arg.Name}{arg.Required and "" or "?"}> : {table.concat(arg.Types, " | ")}`)
 							end
-							for _, attr in def.Attributes or {} do
-								ctx.Info(`  -{attr.Short or attr.Name}  {attr.Description or attr.Name}`)
+							for _, flag in def.Flags or {} do
+								ctx.Info(`  -{flag.Short or flag.Name}  {flag.Description or flag.Name}`)
+							end
+							for _, mod in def.Modifiers or {} do
+								ctx.Info(`  --{mod.Name}={(mod.Types and table.concat(mod.Types, "|")) or "any"}  {mod.Description or ""}`)
 							end
 						end
 					elseif rich then
@@ -232,7 +242,7 @@ function Commands.build(services: Services): { any }
 			Description = "open the script editor",
 			Network = "Client",
 			Args = { { Name = "file", Types = { "String" }, Required = false } },
-			Attributes = {
+			Flags = {
 				{ Name = "server", Short = "s", Description = "edit in server context" },
 				{ Name = "client", Short = "c", Description = "edit in client context" },
 			},
@@ -242,7 +252,7 @@ function Commands.build(services: Services): { any }
 					ctx.Err("kaveat isnt on, start with Kaveat = true")
 					return
 				end
-				local a = ctx.Attributes
+				local a = ctx.Flags
 				if a.server and a.client then
 					ctx.Err("cant be both server and client")
 					return
@@ -1028,11 +1038,14 @@ function Commands.build(services: Services): { any }
 				{ Name = "command", Types = { "String" }, Required = true },
 				{ Name = "times", Types = { "Integer" }, Required = true },
 			},
+			Modifiers = {
+				{ Name = "delay", Types = { "Number" }, Default = 0, Description = "seconds between runs" },
+			},
 			On = { Client = function(ctx)
 				local line = ctx.Args.command
 				local maxTimes = (services.defaults and services.defaults.Repeat.MaxTimes) or 10000
 				local times = math.clamp(ctx.Args.times, 1, maxTimes)
-				local delay = tonumber(ctx.Options.delay) or 0
+				local delay = ctx.Modifiers.delay or 0
 				local ind = ctx.Indicator({ type = "progress", label = `{line} x{times}`, total = times })
 				local fails = 0
 				for i = 1, times do

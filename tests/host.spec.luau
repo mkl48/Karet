@@ -149,9 +149,9 @@ return function(t)
 			r:register({
 				Name = "ban",
 				Network = "Shared",
-				Attributes = { { Name = "permanent", Short = "p" } },
+				Flags = { { Name = "permanent", Short = "p" } },
 				On = { Shared = function(ctx)
-					seen = ctx.Attributes.permanent
+					seen = ctx.Flags.permanent
 				end },
 			})
 		end)
@@ -159,14 +159,14 @@ return function(t)
 		Assert.truthy(seen, "flag set true")
 	end)
 
-	t.test("valued long options (--name=value) reach ctx.Options", function()
+	t.test("modifiers (--name=value) reach ctx.Modifiers", function()
 		local seen
 		local k = rig(function(r)
 			r:register({
 				Name = "go",
 				Network = "Shared",
 				On = { Shared = function(ctx)
-					seen = ctx.Options
+					seen = ctx.Modifiers
 				end },
 			})
 		end)
@@ -174,6 +174,27 @@ return function(t)
 		Assert.truthy(result.ok, "ran")
 		Assert.eq(seen.delay, 2, "numeric option parsed")
 		Assert.eq(seen.label, "hi", "string option parsed")
+	end)
+
+	t.test("declared modifiers apply defaults and coerce to their type", function()
+		local seen
+		local k = rig(function(r)
+			r:register({
+				Name = "spin",
+				Network = "Shared",
+				Modifiers = { { Name = "delay", Types = { "Number" }, Default = 5 } },
+				On = { Shared = function(ctx)
+					seen = ctx.Modifiers.delay
+				end },
+			})
+		end)
+		k.run("spin")
+		Assert.eq(seen, 5, "default applied when omitted")
+		k.run("spin --delay=2")
+		Assert.eq(seen, 2, "passed value coerced to a number")
+		local bad = k.run("spin --delay=abc")
+		Assert.falsy(bad.ok, "wrong type rejected")
+		Assert.truthy(string.find(bad.error, "delay"), "error names the modifier")
 	end)
 
 	t.test("a bare --directive still works alongside command args", function()

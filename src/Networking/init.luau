@@ -29,8 +29,8 @@ local KAVEAT_CHANNEL = "KaretKaveat"
 export type Request = {
 	name: string, -- command name
 	args: { [string]: any }?, -- resolved (still-to-be-revalidated) args
-	attributes: { [string]: boolean }?, -- flag set
-	options: { [string]: any }?, -- valued long flags (--name=value)
+	flags: { [string]: boolean }?, -- boolean flag set (-s)
+	modifiers: { [string]: any }?, -- valued long options (--name=value)
 	payload: any, -- Context command's committed payload, if any
 	rawInput: string?, -- the original line, for audit/re-parse
 }
@@ -52,8 +52,8 @@ function Networking.new()
 			local atom = self.substance.Define(ATOM, {
 				name = Type.string(),
 				args = Type.any():nullable(),
-				attributes = Type.any():nullable(),
-				options = Type.any():nullable(),
+				flags = Type.any():nullable(),
+				modifiers = Type.any():nullable(),
 				payload = Type.any():nullable(),
 				rawInput = Type.string():nullable(),
 			})

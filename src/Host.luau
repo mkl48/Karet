@@ -141,14 +141,14 @@ function Host.new(opts: Options)
 	end
 
 	-- Build ctx, run middleware + the handler, collect returns. Returns (result, control).
-	local function executeLocal(name, def, handlerFn, args, attributes, payload, roleInfo, options)
+	local function executeLocal(name, def, handlerFn, args, flags, payload, roleInfo, modifiers)
 		local ctx, control = Context.new({
 			player = session.player,
 			command = name,
 			rawInput = session.rawInput,
 			args = args,
-			attributes = attributes,
-			options = options,
+			flags = flags,
+			modifiers = modifiers,
 			isServer = isServer,
 			isClient = isClient,
 			role = roleInfo and roleInfo.role,
@@ -224,7 +224,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no server handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player), invocation.options)
+			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
 			return result
 		end
 
@@ -234,7 +234,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no {network} handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player), invocation.options)
+			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
 			return result
 		elseif network == "Server" then
 			if not networking then
@@ -243,8 +243,8 @@ function Host.new(opts: Options)
 			return invokeAndReplay({
 				name = name,
 				args = invocation.args,
-				attributes = invocation.attributes,
-				options = invocation.options,
+				flags = invocation.flags,
+				modifiers = invocation.modifiers,
 				payload = nil,
 				rawInput = session.rawInput,
 			})
@@ -253,7 +253,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no client handler` }
 			end
-			local result, control = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player), invocation.options)
+			local result, control = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
 			if not result.ok then
 				return result
 			end
@@ -263,8 +263,8 @@ function Host.new(opts: Options)
 			return invokeAndReplay({
 				name = name,
 				args = invocation.args,
-				attributes = invocation.attributes,
-				options = invocation.options,
+				flags = invocation.flags,
+				modifiers = invocation.modifiers,
 				payload = control.committed(),
 				rawInput = session.rawInput,
 			})
@@ -309,7 +309,7 @@ function Host.new(opts: Options)
 
 		local prevPlayer, prevRaw, prevOut = session.player, session.rawInput, currentOutput
 		session.player, session.rawInput, currentOutput = player, request.rawInput, {}
-		local result = executeLocal(request.name, def, fn, typedArgs, request.attributes or {}, request.payload, roleInfoFor(player), request.options)
+		local result = executeLocal(request.name, def, fn, typedArgs, request.flags or {}, request.payload, roleInfoFor(player), request.modifiers)
 		result.output = currentOutput
 		session.player, session.rawInput, currentOutput = prevPlayer, prevRaw, prevOut
 		return result

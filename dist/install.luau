@@ -1038,19 +1038,29 @@ function Commands.build(services: Services): { any }
 								end
 								ctx.UI.Table({ headers = { "argument", "types" }, rows = rows })
 							end
-							if def.Attributes and #def.Attributes > 0 then
+							if def.Flags and #def.Flags > 0 then
 								local rows = {}
-								for _, attr in def.Attributes do
-									table.insert(rows, { "-" .. (attr.Short or attr.Name), attr.Description or attr.Name })
+								for _, flag in def.Flags do
+									table.insert(rows, { "-" .. (flag.Short or flag.Name), flag.Description or flag.Name })
 								end
 								ctx.UI.Table({ headers = { "flag", "description" }, rows = rows })
+							end
+							if def.Modifiers and #def.Modifiers > 0 then
+								local rows = {}
+								for _, mod in def.Modifiers do
+									table.insert(rows, { `--{mod.Name}=`, (mod.Types and table.concat(mod.Types, " | ")) or "any", mod.Description or "" })
+								end
+								ctx.UI.Table({ headers = { "modifier", "types", "description" }, rows = rows })
 							end
 						else
 							for _, arg in def.Args or {} do
 								ctx.Info(`  <{arg.Name}{arg.Required and "" or "?"}> : {table.concat(arg.Types, " | ")}`)
 							end
-							for _, attr in def.Attributes or {} do
-								ctx.Info(`  -{attr.Short or attr.Name}  {attr.Description or attr.Name}`)
+							for _, flag in def.Flags or {} do
+								ctx.Info(`  -{flag.Short or flag.Name}  {flag.Description or flag.Name}`)
+							end
+							for _, mod in def.Modifiers or {} do
+								ctx.Info(`  --{mod.Name}={(mod.Types and table.concat(mod.Types, "|")) or "any"}  {mod.Description or ""}`)
 							end
 						end
 					elseif rich then
@@ -1187,7 +1197,7 @@ function Commands.build(services: Services): { any }
 			Description = "open the script editor",
 			Network = "Client",
 			Args = { { Name = "file", Types = { "String" }, Required = false } },
-			Attributes = {
+			Flags = {
 				{ Name = "server", Short = "s", Description = "edit in server context" },
 				{ Name = "client", Short = "c", Description = "edit in client context" },
 			},
@@ -1197,7 +1207,7 @@ function Commands.build(services: Services): { any }
 					ctx.Err("kaveat isnt on, start with Kaveat = true")
 					return
 				end
-				local a = ctx.Attributes
+				local a = ctx.Flags
 				if a.server and a.client then
 					ctx.Err("cant be both server and client")
 					return
@@ -1983,11 +1993,14 @@ function Commands.build(services: Services): { any }
 				{ Name = "command", Types = { "String" }, Required = true },
 				{ Name = "times", Types = { "Integer" }, Required = true },
 			},
+			Modifiers = {
+				{ Name = "delay", Types = { "Number" }, Default = 0, Description = "seconds between runs" },
+			},
 			On = { Client = function(ctx)
 				local line = ctx.Args.command
 				local maxTimes = (services.defaults and services.defaults.Repeat.MaxTimes) or 10000
 				local times = math.clamp(ctx.Args.times, 1, maxTimes)
-				local delay = tonumber(ctx.Options.delay) or 0
+				local delay = ctx.Modifiers.delay or 0
 				local ind = ctx.Indicator({ type = "progress", label = `{line} x{times}`, total = times })
 				local fails = 0
 				for i = 1, times do
@@ -2370,13 +2383,22 @@ function Complete.build(registry: any, types: any, envList: (() -> { string })?)
 		end
 		local partial = trailingSpace and "" or words[#words]
 
-		if string.sub(partial, 1, 1) == "-" then
+		-- "--name" -> declared modifiers (valued long options); "-x" -> boolean flags
+		if string.sub(partial, 1, 2) == "--" then
+			local p = string.lower(string.sub(partial, 3))
+			for _, mod in def.Modifiers or {} do
+				if string.sub(string.lower(mod.Name), 1, #p) == p then
+					table.insert(out, { text = `--{mod.Name}=`, detail = mod.Description or (mod.Types and table.concat(mod.Types, "|")) or "modifier", insert = `--{mod.Name}=` })
+				end
+			end
+			return out
+		elseif string.sub(partial, 1, 1) == "-" then
 			local p = string.lower((string.gsub(partial, "^%-+", "")))
-			for _, attr in def.Attributes or {} do
-				local short = attr.Short
-				if string.sub(string.lower(attr.Name), 1, #p) == p or (short and string.lower(short) == p) then
-					local flag = "-" .. (short or attr.Name)
-					table.insert(out, { text = flag, detail = attr.Description or attr.Name, insert = flag })
+			for _, flag in def.Flags or {} do
+				local short = flag.Short
+				if string.sub(string.lower(flag.Name), 1, #p) == p or (short and string.lower(short) == p) then
+					local f = "-" .. (short or flag.Name)
+					table.insert(out, { text = f, detail = flag.Description or flag.Name, insert = f })
 				end
 			end
 			return out
@@ -2485,8 +2507,8 @@ export type Options = {
 	command: string,
 	rawInput: string?,
 	args: { [string]: any },
-	attributes: { [string]: boolean },
-	options: { [string]: any }?, -- valued long flags: --name=value
+	flags: { [string]: boolean },
+	modifiers: { [string]: any }?, -- valued long options: --name=value
 	isServer: boolean,
 	isClient: boolean,
 	role: string?,
@@ -2511,8 +2533,8 @@ export type Context = {
 	Command: string,
 	RawInput: string?,
 	Args: { [string]: any },
-	Attributes: { [string]: boolean },
-	Options: { [string]: any }, -- valued long flags (--name=value)
+	Flags: { [string]: boolean }, -- boolean toggles: -s / -p
+	Modifiers: { [string]: any }, -- valued long options: --name=value
 	IsServer: boolean,
 	IsClient: boolean,
 	ExecutedAt: number,
@@ -2554,8 +2576,8 @@ function Context.new(opts: Options): (any, Control)
 		Command = opts.command,
 		RawInput = opts.rawInput,
 		Args = opts.args,
-		Attributes = opts.attributes,
-		Options = opts.options or {},
+		Flags = opts.flags,
+		Modifiers = opts.modifiers or {},
 		IsServer = opts.isServer,
 		IsClient = opts.isClient,
 		ExecutedAt = os.clock(),
@@ -4388,14 +4410,14 @@ function Host.new(opts: Options)
 	end
 
 	-- Build ctx, run middleware + the handler, collect returns. Returns (result, control).
-	local function executeLocal(name, def, handlerFn, args, attributes, payload, roleInfo, options)
+	local function executeLocal(name, def, handlerFn, args, flags, payload, roleInfo, modifiers)
 		local ctx, control = Context.new({
 			player = session.player,
 			command = name,
 			rawInput = session.rawInput,
 			args = args,
-			attributes = attributes,
-			options = options,
+			flags = flags,
+			modifiers = modifiers,
 			isServer = isServer,
 			isClient = isClient,
 			role = roleInfo and roleInfo.role,
@@ -4471,7 +4493,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no server handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player), invocation.options)
+			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
 			return result
 		end
 
@@ -4481,7 +4503,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no {network} handler` }
 			end
-			local result = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player), invocation.options)
+			local result = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
 			return result
 		elseif network == "Server" then
 			if not networking then
@@ -4490,8 +4512,8 @@ function Host.new(opts: Options)
 			return invokeAndReplay({
 				name = name,
 				args = invocation.args,
-				attributes = invocation.attributes,
-				options = invocation.options,
+				flags = invocation.flags,
+				modifiers = invocation.modifiers,
 				payload = nil,
 				rawInput = session.rawInput,
 			})
@@ -4500,7 +4522,7 @@ function Host.new(opts: Options)
 			if not fn then
 				return { ok = false, error = `'{name}' has no client handler` }
 			end
-			local result, control = executeLocal(name, def, fn, invocation.args, invocation.attributes, nil, roleInfoFor(session.player), invocation.options)
+			local result, control = executeLocal(name, def, fn, invocation.args, invocation.flags, nil, roleInfoFor(session.player), invocation.modifiers)
 			if not result.ok then
 				return result
 			end
@@ -4510,8 +4532,8 @@ function Host.new(opts: Options)
 			return invokeAndReplay({
 				name = name,
 				args = invocation.args,
-				attributes = invocation.attributes,
-				options = invocation.options,
+				flags = invocation.flags,
+				modifiers = invocation.modifiers,
 				payload = control.committed(),
 				rawInput = session.rawInput,
 			})
@@ -4556,7 +4578,7 @@ function Host.new(opts: Options)
 
 		local prevPlayer, prevRaw, prevOut = session.player, session.rawInput, currentOutput
 		session.player, session.rawInput, currentOutput = player, request.rawInput, {}
-		local result = executeLocal(request.name, def, fn, typedArgs, request.attributes or {}, request.payload, roleInfoFor(player), request.options)
+		local result = executeLocal(request.name, def, fn, typedArgs, request.flags or {}, request.payload, roleInfoFor(player), request.modifiers)
 		result.output = currentOutput
 		session.player, session.rawInput, currentOutput = prevPlayer, prevRaw, prevOut
 		return result
@@ -20422,8 +20444,8 @@ local KAVEAT_CHANNEL = "KaretKaveat"
 export type Request = {
 	name: string, -- command name
 	args: { [string]: any }?, -- resolved (still-to-be-revalidated) args
-	attributes: { [string]: boolean }?, -- flag set
-	options: { [string]: any }?, -- valued long flags (--name=value)
+	flags: { [string]: boolean }?, -- boolean flag set (-s)
+	modifiers: { [string]: any }?, -- valued long options (--name=value)
 	payload: any, -- Context command's committed payload, if any
 	rawInput: string?, -- the original line, for audit/re-parse
 }
@@ -20445,8 +20467,8 @@ function Networking.new()
 			local atom = self.substance.Define(ATOM, {
 				name = Type.string(),
 				args = Type.any():nullable(),
-				attributes = Type.any():nullable(),
-				options = Type.any():nullable(),
+				flags = Type.any():nullable(),
+				modifiers = Type.any():nullable(),
 				payload = Type.any():nullable(),
 				rawInput = Type.string():nullable(),
 			})
@@ -20640,7 +20662,8 @@ local _19 = mod("Registry", _1, [[
 -- A definition is the canonical record from DESIGN → Command definition:
 --   { Name, Aliases?, Description?, Network?, Permission?,
 --     Args = { { Name, Types, Required?, Default? }, ... },
---     Attributes = { { Name, Short?, Description? }, ... },
+--     Flags = { { Name, Short?, Description? }, ... },        -- boolean -s toggles
+--     Modifiers = { { Name, Types?, Default?, Description? }, ... }, -- --name=value
 --     Returns = { { Name, Type }, ... },
 --     On = { Client?, Server?, Shared? } }
 
@@ -20651,7 +20674,10 @@ export type NetworkKind = "Shared" | "Client" | "Server" | "Context"
 export type Handler = (ctx: any, payload: any?) -> ()
 
 export type Arg = { Name: string, Types: { string }, Required: boolean?, Default: any? }
-export type Attribute = { Name: string, Short: string?, Description: string? }
+-- boolean toggles: -s / -p (stackable shorts), declared per command
+export type Flag = { Name: string, Short: string?, Description: string? }
+-- valued long options: --delay=2 / --label=hi, optionally typed + defaulted
+export type Modifier = { Name: string, Types: { string }?, Default: any?, Description: string? }
 export type Return = { Name: string, Type: string }
 
 export type Definition = {
@@ -20662,7 +20688,8 @@ export type Definition = {
 	Permission: string?,
 	Dangerous: boolean?, -- prompt for confirmation before running (see Start{ PromptType })
 	Args: { Arg }?,
-	Attributes: { Attribute }?,
+	Flags: { Flag }?,
+	Modifiers: { Modifier }?,
 	Returns: { Return }?,
 	On: { Client: Handler?, Server: Handler?, Shared: Handler? }?,
 }
@@ -20675,7 +20702,8 @@ export type Builder = {
 	Permission: (self: Builder, role: string) -> Builder,
 	Dangerous: (self: Builder, flag: boolean?) -> Builder,
 	Arg: (self: Builder, arg: Arg) -> Builder,
-	Attribute: (self: Builder, attr: Attribute) -> Builder,
+	Flag: (self: Builder, flag: Flag) -> Builder,
+	Modifier: (self: Builder, modifier: Modifier) -> Builder,
 	Return: (self: Builder, ret: Return) -> Builder,
 	On: (self: Builder, realm: NetworkKind, handler: Handler) -> Builder,
 	Register: (self: Builder) -> Definition,
@@ -20748,7 +20776,7 @@ Builder.__index = Builder
 function Registry:command(name: string): Builder
 	return setmetatable({
 		registry = self,
-		def = { Name = name, Aliases = {}, Args = {}, Attributes = {}, Returns = {}, On = {} } :: Definition,
+		def = { Name = name, Aliases = {}, Args = {}, Flags = {}, Modifiers = {}, Returns = {}, On = {} } :: Definition,
 	}, Builder) :: any
 end
 
@@ -20785,8 +20813,13 @@ function Builder:Arg(arg: Arg)
 	return self
 end
 
-function Builder:Attribute(attr: Attribute)
-	table.insert(self.def.Attributes, attr)
+function Builder:Flag(flag: Flag)
+	table.insert(self.def.Flags, flag)
+	return self
+end
+
+function Builder:Modifier(modifier: Modifier)
+	table.insert(self.def.Modifiers, modifier)
 	return self
 end
 
@@ -21339,7 +21372,8 @@ mod("Evaluator", _21, [[
 -- A command definition's relevant fields:
 --   Args  = { { Name, Types: {string}, Required: boolean?, Default: any? }, ... }
 --   Returns = { { Name, Type }, ... }
---   Attributes = { { Name, Short }, ... }
+--   Flags = { { Name, Short }, ... }                 -- boolean -s toggles
+--   Modifiers = { { Name, Types?, Default? }, ... }  -- --name=value
 
 local ReturnPool = require(script.Parent.ReturnPool)
 local Ast = require(script.Parent.Ast)
@@ -21612,27 +21646,43 @@ function Evaluator:executeCommand(node: any): any
 		end
 	end
 
-	local flags, ferr = resolveFlags(node.flags, def.Attributes)
+	local flags, ferr = resolveFlags(node.flags, def.Flags)
 	if ferr then
 		return { ok = false, error = ferr }
 	end
 
-	-- valued long options (--name=value): resolve each value expression
-	local options: { [string]: any } = {}
-	for name, valueNode in node.options or {} do
+	-- modifiers (--name=value). seed declared defaults, then resolve each passed value; if the
+	-- command declares the modifier with Types, coerce against them, else keep it raw.
+	local modifiers: { [string]: any } = {}
+	local modSpecs: { [string]: any } = {}
+	for _, spec in def.Modifiers or {} do
+		modSpecs[spec.Name] = spec
+		if spec.Default ~= nil then
+			modifiers[spec.Name] = spec.Default
+		end
+	end
+	for name, valueNode in node.modifiers or {} do
 		local v, oerr = self:evalExpr(valueNode)
 		if oerr then
-			return { ok = false, error = `option '--{name}': {oerr}` }
+			return { ok = false, error = `modifier '--{name}': {oerr}` }
 		end
-		options[name] = v
+		local spec = modSpecs[name]
+		if spec and spec.Types then
+			local typed, terr = host.coerce(v, spec.Types)
+			if terr then
+				return { ok = false, error = `modifier '--{name}': {terr}` }
+			end
+			v = typed
+		end
+		modifiers[name] = v
 	end
 
 	local result = host.run({
 		name = node.name,
 		definition = def,
 		args = typedArgs,
-		attributes = flags,
-		options = options,
+		flags = flags,
+		modifiers = modifiers,
 		node = node,
 	})
 
@@ -22499,7 +22549,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 		local nameTok = advance() -- Ident (caller guarantees)
 		local args = {}
 		local flags = {}
-		local options: { [string]: any } = {} -- valued long options: --name=value
+		local modifiers: { [string]: any } = {} -- valued long options: --name=value
 		while true do
 			local k = kind()
 			if
@@ -22514,7 +22564,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 			then
 				break
 			elseif k == K.MinusMinus then
-				-- "--name=value" is a command option; a bare "--name" is left for the chain
+				-- "--name=value" is a command modifier; a bare "--name" is left for the chain
 				-- directive parser (so --Ignore-Errors / --Dry-Run still work unchanged).
 				local nameNx = peek(1)
 				local eqNx = peek(2)
@@ -22530,7 +22580,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 						diag(`expected a value after '--{nameNx.value}='`)
 						break
 					end
-					options[nameNx.value] = val
+					modifiers[nameNx.value] = val
 				else
 					break
 				end
@@ -22556,7 +22606,7 @@ function Parser.parseTokens(tokens: { Token.Token }, diagnostics: { Lexer.Diagno
 				table.insert(args, arg)
 			end
 		end
-		return { kind = N.Command, name = nameTok.value, nameToken = nameTok, args = args, flags = flags, options = options }
+		return { kind = N.Command, name = nameTok.value, nameToken = nameTok, args = args, flags = flags, modifiers = modifiers }
 	end
 
 	-- ---- guards & blocks ----
