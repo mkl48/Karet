@@ -20,6 +20,7 @@ local specs = {
 	{ name = "Alias", spec = require("./alias.spec") },
 	{ name = "Search", spec = require("./search.spec") },
 	{ name = "Diagnostics", spec = require("./diagnostics.spec") },
+	{ name = "KavModules", spec = require("./kavmodules.spec") },
 	{ name = "Extensions", spec = require("./extensions.spec") },
 }
 

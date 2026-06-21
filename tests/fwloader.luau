@@ -23,6 +23,7 @@ local FILES = {
 	Complete = "src/Complete/init.luau",
 	KaveatComplete = "src/Kaveat/Complete.luau",
 	Diagnostics = "src/Kaveat/Diagnostics.luau",
+	KavModules = "src/Kaveat/Modules.luau",
 	Alias = "src/Alias/init.luau",
 	Search = "src/Terminal/Search.luau",
 	Extensions = "src/Extensions/init.luau",

@@ -51,6 +51,7 @@ local Host = require(script.Host)
 local Networking = require(script.Networking)
 local Commands = require(script.Commands)
 local Kaveat = require(script.Kaveat)
+local KavModules = require(script.Kaveat.Modules)
 local Cache = require(script.Cache)
 local Query = require(script.Query)
 local Profile = require(script.Profile)
@@ -804,7 +805,8 @@ local function startClient(options: StartConfig)
 		-- ctrl+enter / :run ships the script to the server to loadstring. any print/warn the
 		-- script makes is captured server-side and replayed line by line into the kav output.
 		editor:setRunner(function(source, _context)
-			local res = networking:invokeKaveat(source, _context)
+			-- ship the whole kav store alongside so the script can require() sibling kavs
+			local res = networking:invokeKaveat(source, _context, Karet.Profile.Kavs)
 			if type(res.lines) == "table" then
 				for _, l in res.lines do
 					editor:print(tostring(l.text), l.group or "Output")
@@ -1088,6 +1090,7 @@ local function startServer(options: StartConfig)
 		end
 		return ke == true
 	end
+	local realRequire = require
 	networking:listenKaveat(function(payload, player)
 		if not kaveatAllowed(player) then
 			return { ok = false, error = "kaveat run is disabled here (server Start{ KaveatExec = true })" }
@@ -1111,15 +1114,37 @@ local function startServer(options: StartConfig)
 				table.insert(lines, { text = table.concat(parts, "\t"), group = group })
 			end
 		end
-		local okEnv = pcall(function()
-			setfenv(fn, setmetatable({ print = capture("Output"), warn = capture("Warn") }, { __index = getfenv() }))
+
+		-- kav module system: require("other") loads a sibling kav (from the map the client sent)
+		-- in this same sandbox, caching its return and guarding against cycles. a non-string
+		-- argument (a ModuleScript / asset id) falls through to the real require.
+		local modules = type(payload.modules) == "table" and payload.modules or {}
+		local env: any
+		local moduleRequire = KavModules.newRequire(modules, function(source: string, name: string)
+			local mfn, merr = loadstring(source)
+			if not mfn then
+				error(`compile error in kav '{name}': {tostring(merr)}`, 0)
+			end
+			pcall(setfenv, mfn, env)
+			return mfn()
 		end)
+		local function envRequire(arg: any): any
+			if type(arg) == "string" then
+				return moduleRequire(arg)
+			end
+			return realRequire(arg)
+		end
+		env = setmetatable(
+			{ print = capture("Output"), warn = capture("Warn"), require = envRequire },
+			{ __index = getfenv() }
+		)
+
+		pcall(setfenv, fn, env)
 		local okr, result = pcall(fn)
 		if not okr then
 			table.insert(lines, { text = tostring(result), group = "Error" })
 			return { ok = false, error = tostring(result), lines = lines }
 		end
-		local _ = okEnv
 		return { ok = true, output = result ~= nil and tostring(result) or "ran ok", lines = lines }
 	end)
 
@@ -21838,6 +21863,69 @@ end
 
 return Diagnostics
 ]==])
+mod("Modules", _17, [[
+-- the kav module system: lets one kav `require` another by name, ModuleScript-style. a kav
+-- module runs at most once and its return value is cached; a require cycle errors cleanly
+-- instead of hanging.
+--
+-- this module is just the bookkeeping (resolve a name, cache results, detect cycles). the
+-- actual compile+run is injected as `run(source, name)` by the server (it needs loadstring /
+-- setfenv, which are engine-only), so the bookkeeping stays pure and unit-tested.
+
+local Modules = {}
+
+-- find a kav in the source map, tolerating a `.luau` suffix on either side
+local function resolve(map: { [string]: string }, name: string): string?
+	if map[name] ~= nil then
+		return name
+	end
+	if map[name .. ".luau"] ~= nil then
+		return name .. ".luau"
+	end
+	local stripped = (string.gsub(name, "%.luau$", ""))
+	if map[stripped] ~= nil then
+		return stripped
+	end
+	return nil
+end
+
+-- build a require(name) closure over `map` (name -> source). `run(source, name)` compiles and
+-- runs a module's source and returns its value. caching + cycle detection live here; a module
+-- that returns nothing caches as `true` (so it still requires cleanly).
+function Modules.newRequire(map: { [string]: string }, run: (source: string, name: string) -> any): (string) -> any
+	local cache: { [string]: any } = {}
+	local loading: { [string]: boolean } = {}
+
+	local function req(name: string): any
+		name = tostring(name)
+		local key = resolve(map, name)
+		if not key then
+			error(`no kav module '{name}'`, 0)
+		end
+		if cache[key] ~= nil then
+			return cache[key]
+		end
+		if loading[key] then
+			error(`cyclic require of kav '{key}'`, 0)
+		end
+		loading[key] = true
+		local ok, value = pcall(run, map[key], key)
+		loading[key] = nil
+		if not ok then
+			error(value, 0)
+		end
+		if value == nil then
+			value = true
+		end
+		cache[key] = value
+		return value
+	end
+
+	return req
+end
+
+return Modules
+]])
 local _18 = mod("Lucide", _1, [=[
 -- MIT License | Copyright (c) 2023 Latte Softworks <https://latte.to>
 
@@ -22162,6 +22250,7 @@ function Networking.new()
 			local atom = self.substance.Define(KAVEAT_ATOM, {
 				source = Type.string(),
 				context = Type.string():nullable(),
+				modules = Type.any():nullable(), -- the player's kav map (name -> source), for require()
 			})
 			atom:Compose(KAVEAT_CHANNEL, "Solve")
 			return atom
@@ -22230,13 +22319,14 @@ function Networking:listen(runner: (Request, any) -> Result)
 	end)
 end
 
--- CLIENT: ship a kaveat script to the server to run, yield for the result.
-function Networking:invokeKaveat(source: string, context: string?): any
+-- CLIENT: ship a kaveat script to the server to run, yield for the result. `modules` is the
+-- player's kav map (name -> source) so the script can require() its sibling kavs.
+function Networking:invokeKaveat(source: string, context: string?, modules: any?): any
 	if not self.kaveatAtom then
 		return { ok = false, error = "kaveat networking unavailable (Substance not installed?)" }
 	end
 	local ok, result = pcall(function()
-		return self.kaveatAtom:Post({ source = source, context = context }):Await()
+		return self.kaveatAtom:Post({ source = source, context = context, modules = modules }):Await()
 	end)
 	if not ok then
 		return { ok = false, error = `network error: {result}` }
@@ -38619,5 +38709,5 @@ end
 return deps
 ]])
 
-print("[Karet] installed 111 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 112 modules under ReplicatedStorage.Karet")
 return true

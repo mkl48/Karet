@@ -19,6 +19,7 @@ local Host = require(script.Host)
 local Networking = require(script.Networking)
 local Commands = require(script.Commands)
 local Kaveat = require(script.Kaveat)
+local KavModules = require(script.Kaveat.Modules)
 local Cache = require(script.Cache)
 local Query = require(script.Query)
 local Profile = require(script.Profile)
@@ -772,7 +773,8 @@ local function startClient(options: StartConfig)
 		-- ctrl+enter / :run ships the script to the server to loadstring. any print/warn the
 		-- script makes is captured server-side and replayed line by line into the kav output.
 		editor:setRunner(function(source, _context)
-			local res = networking:invokeKaveat(source, _context)
+			-- ship the whole kav store alongside so the script can require() sibling kavs
+			local res = networking:invokeKaveat(source, _context, Karet.Profile.Kavs)
 			if type(res.lines) == "table" then
 				for _, l in res.lines do
 					editor:print(tostring(l.text), l.group or "Output")
@@ -1056,6 +1058,7 @@ local function startServer(options: StartConfig)
 		end
 		return ke == true
 	end
+	local realRequire = require
 	networking:listenKaveat(function(payload, player)
 		if not kaveatAllowed(player) then
 			return { ok = false, error = "kaveat run is disabled here (server Start{ KaveatExec = true })" }
@@ -1079,15 +1082,37 @@ local function startServer(options: StartConfig)
 				table.insert(lines, { text = table.concat(parts, "\t"), group = group })
 			end
 		end
-		local okEnv = pcall(function()
-			setfenv(fn, setmetatable({ print = capture("Output"), warn = capture("Warn") }, { __index = getfenv() }))
+
+		-- kav module system: require("other") loads a sibling kav (from the map the client sent)
+		-- in this same sandbox, caching its return and guarding against cycles. a non-string
+		-- argument (a ModuleScript / asset id) falls through to the real require.
+		local modules = type(payload.modules) == "table" and payload.modules or {}
+		local env: any
+		local moduleRequire = KavModules.newRequire(modules, function(source: string, name: string)
+			local mfn, merr = loadstring(source)
+			if not mfn then
+				error(`compile error in kav '{name}': {tostring(merr)}`, 0)
+			end
+			pcall(setfenv, mfn, env)
+			return mfn()
 		end)
+		local function envRequire(arg: any): any
+			if type(arg) == "string" then
+				return moduleRequire(arg)
+			end
+			return realRequire(arg)
+		end
+		env = setmetatable(
+			{ print = capture("Output"), warn = capture("Warn"), require = envRequire },
+			{ __index = getfenv() }
+		)
+
+		pcall(setfenv, fn, env)
 		local okr, result = pcall(fn)
 		if not okr then
 			table.insert(lines, { text = tostring(result), group = "Error" })
 			return { ok = false, error = tostring(result), lines = lines }
 		end
-		local _ = okEnv
 		return { ok = true, output = result ~= nil and tostring(result) or "ran ok", lines = lines }
 	end)
 

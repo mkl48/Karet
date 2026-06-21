@@ -77,6 +77,7 @@ function Networking.new()
 			local atom = self.substance.Define(KAVEAT_ATOM, {
 				source = Type.string(),
 				context = Type.string():nullable(),
+				modules = Type.any():nullable(), -- the player's kav map (name -> source), for require()
 			})
 			atom:Compose(KAVEAT_CHANNEL, "Solve")
 			return atom
@@ -145,13 +146,14 @@ function Networking:listen(runner: (Request, any) -> Result)
 	end)
 end
 
--- CLIENT: ship a kaveat script to the server to run, yield for the result.
-function Networking:invokeKaveat(source: string, context: string?): any
+-- CLIENT: ship a kaveat script to the server to run, yield for the result. `modules` is the
+-- player's kav map (name -> source) so the script can require() its sibling kavs.
+function Networking:invokeKaveat(source: string, context: string?, modules: any?): any
 	if not self.kaveatAtom then
 		return { ok = false, error = "kaveat networking unavailable (Substance not installed?)" }
 	end
 	local ok, result = pcall(function()
-		return self.kaveatAtom:Post({ source = source, context = context }):Await()
+		return self.kaveatAtom:Post({ source = source, context = context, modules = modules }):Await()
 	end)
 	if not ok then
 		return { ok = false, error = `network error: {result}` }
