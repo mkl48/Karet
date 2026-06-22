@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.1">
 <title data-rh="true">Karet</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://mkl48.github.io/Karet/"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docusaurus_tag" content="default"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docsearch:docusaurus_tag" content="default"><meta data-rh="true" property="og:title" content="Karet"><link data-rh="true" rel="icon" href="/Karet/favicon.png"><link data-rh="true" rel="canonical" href="https://mkl48.github.io/Karet/"><link data-rh="true" rel="alternate" href="https://mkl48.github.io/Karet/" hreflang="en"><link data-rh="true" rel="alternate" href="https://mkl48.github.io/Karet/" hreflang="x-default"><script data-rh="true">function insertBanner(){var n=document.createElement("div");n.id="__docusaurus-base-url-issue-banner-container";n.innerHTML='\n<div id="__docusaurus-base-url-issue-banner" style="border: thick solid red; background-color: rgb(255, 230, 179); margin: 20px; padding: 20px; font-size: 20px;">\n   <p style="font-weight: bold; font-size: 30px;">Your Docusaurus site did not load properly.</p>\n   <p>A very common reason is a wrong site <a href="https://docusaurus.io/docs/docusaurus.config.js/#baseUrl" style="font-weight: bold;">baseUrl configuration</a>.</p>\n   <p>Current configured baseUrl = <span style="font-weight: bold; color: red;">/Karet/</span> </p>\n   <p>We suggest trying baseUrl = <span id="__docusaurus-base-url-issue-banner-suggestion-container" style="font-weight: bold; color: green;"></span></p>\n</div>\n',document.body.prepend(n);var e=document.getElementById("__docusaurus-base-url-issue-banner-suggestion-container"),s=window.location.pathname,o="/"===s.substr(-1)?s:s+"/";e.innerHTML=o}document.addEventListener("DOMContentLoaded",(function(){void 0===window.docusaurus&&insertBanner()}))</script><link rel="stylesheet" href="/Karet/assets/css/styles.ae967cf2.css">
-<script src="/Karet/assets/js/runtime~main.2ed47ce4.js" defer="defer"></script>
-<script src="/Karet/assets/js/main.06b50644.js" defer="defer"></script>
+<script src="/Karet/assets/js/runtime~main.f857cc67.js" defer="defer"></script>
+<script src="/Karet/assets/js/main.c2413caf.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -69,14 +69,14 @@ tree (deps included) under <code>ReplicatedStorage</code>.</p>
 <p><strong>Client</strong> - <code>LocalScript</code> in <code>StarterPlayerScripts</code>:</p>
 <pre><code class="language-lua">local Karet = require(game.ReplicatedStorage.Karet)
 
-Karet.Command(&quot;echo&quot;)
-    :Description(&quot;print your text back&quot;)
-    :Network(&quot;Client&quot;)
-    :Arg({ Name = &quot;text&quot;, Types = { &quot;String&quot; }, Required = true })
-    :On(&quot;Client&quot;, function(ctx)
+Karet.Command(&quot;echo&quot;, {
+    Description = &quot;print your text back&quot;,
+    Network = &quot;Client&quot;,
+    Args = { { Name = &quot;text&quot;, Type = &quot;String&quot;, Required = true } },
+    Client = function(ctx)
         ctx.Print(ctx.Args.text)
-    end)
-    :Register()
+    end,
+})
 
 Karet.Start({
     Toggle = &quot;Semicolon&quot;,            -- press ; to open/close the terminal
@@ -94,46 +94,41 @@ end)
 Karet.Start({ DefaultRole = &quot;User&quot; })
 </code></pre>
 <h2 id="defining-commands">Defining commands</h2>
-<p>Two equivalent styles - the table is the canonical record, the builder is sugar.</p>
-<pre><code class="language-lua">-- Table style
-Karet.Register({
-    Name        = &quot;ban&quot;,
-    Aliases     = { &quot;b&quot; },
-    Network     = &quot;Context&quot;,   -- Shared | Client | Server | Context
-    Permission  = &quot;Admin&quot;,
+<p>One form: <code>Karet.Command(name, def)</code>. Handlers are the top-level <code>Server</code> / <code>Client</code> / <code>Shared</code>
+fields. Declare an arg record and annotate the handler&#x27;s <code>ctx</code> with <code>Karet.Context&lt;...&gt;</code> for typed,
+autocompleted <code>ctx.Args</code>.</p>
+<pre><code class="language-lua">type BanArgs = { target: Player, duration: number? }
+
+Karet.Command(&quot;ban&quot;, {
+    Aliases    = { &quot;b&quot; },
+    Network    = &quot;Context&quot;,   -- Shared | Client | Server | Context
+    Permission = &quot;Admin&quot;,
     Args = {
-        { Name = &quot;target&quot;,   Types = { &quot;Player&quot; },   Required = true },
-        { Name = &quot;duration&quot;, Types = { &quot;Duration&quot; }, Required = false, Default = 86400 },
+        { Name = &quot;target&quot;,   Type = &quot;Player&quot;,   Required = true },
+        { Name = &quot;duration&quot;, Type = &quot;Duration&quot;, Required = false, Default = 86400 },
     },
-    Attributes = {
+    Flags = {
         { Name = &quot;permanent&quot;, Short = &quot;p&quot;, Description = &quot;permanent ban&quot; },
     },
     Returns = {
         { Name = &quot;target&quot;, Type = &quot;Player&quot; },
     },
-    On = {
-        Client = function(ctx)
-            ctx.Commit({ TargetId = ctx.Args.target.UserId,
-                         Duration = ctx.Attributes.permanent and -1 or ctx.Args.duration })
-        end,
-        Server = function(ctx, payload)
-            local target = game.Players:GetPlayerByUserId(payload.TargetId)
-            if target then target:Kick(&quot;banned&quot;) end
-            ctx.Reply(payload.TargetId .. &quot; banned&quot;)
-        end,
-    },
+    -- the Context bridge: Client builds a payload, Server acts on it authoritatively
+    Client = function(ctx: Karet.Context&lt;BanArgs&gt;)
+        ctx.Commit({
+            TargetId = ctx.Args.target.UserId,
+            Duration = ctx.Flags.permanent and -1 or ctx.Args.duration,
+        })
+    end,
+    Server = function(ctx, payload)
+        local target = game.Players:GetPlayerByUserId(payload.TargetId)
+        if target then target:Kick(&quot;banned&quot;) end
+        ctx.Reply(payload.TargetId .. &quot; banned&quot;)
+    end,
 })
 </code></pre>
-<pre><code class="language-lua">-- Builder style
-Karet.Command(&quot;ban&quot;)
-    :Alias(&quot;b&quot;)
-    :Network(&quot;Context&quot;)
-    :Permission(&quot;Admin&quot;)
-    :Arg({ Name = &quot;target&quot;, Types = { &quot;Player&quot; }, Required = true })
-    :Attribute({ Name = &quot;permanent&quot;, Short = &quot;p&quot; })
-    :On(&quot;Client&quot;, function(ctx) ctx.Commit({ TargetId = ctx.Args.target.UserId }) end)
-    :On(&quot;Server&quot;, function(ctx, payload) --[[ ... ]] end)
-    :Register()
+<p>Or keep each command in its own ModuleScript and auto-load a folder of them:</p>
+<pre><code class="language-lua">Karet.Start({ Commands = game.ReplicatedStorage.Commands })
 </code></pre>
 <h3 id="custom-types">Custom types</h3>
 <pre><code class="language-lua">Karet.DefineType(&quot;Color&quot;, {
@@ -174,7 +169,7 @@ Karet.Theme.Set(&quot;mytheme&quot;)
 <pre><code class="language-lua">-- shell
 Karet.Tokenize(raw) ; Karet.Parse(raw) ; Karet.Analyze(source)
 -- commands &amp; types
-Karet.Register(def) ; Karet.Command(name) ; Karet.DefineType(name, def)
+Karet.Command(name, def) ; Karet.DefineType(name, def)
 -- auth &amp; middleware
 Karet.SetRoleHook / SetAuthHook / SetGroupHook / SetRoles / SetDefaultRole
 Karet.AllowPlayer / DenyPlayer
