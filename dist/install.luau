@@ -72,17 +72,43 @@ local ThemeEditor = require(script.Theme.Editor)
 export type ThemePalette = Theme.Palette
 export type ThemeGroup = Theme.Group
 export type Argument = Registry.Arg
-export type Attribute = Registry.Attribute
 export type ReturnSpec = Registry.Return
 export type NetworkKind = Registry.NetworkKind
-export type Handler = Registry.Handler
-export type CommandDefinition = Registry.Definition
-export type CommandBuilder = Registry.Builder
-export type Context = ContextMod.Context
+export type Handler<TArgs = { [string]: any }> = Registry.Handler<TArgs>
+export type CommandDefinition<TArgs = { [string]: any }> = Registry.Definition<TArgs>
+-- the ctx handed to every handler. parameterise it with your arg record for typed args:
+-- `Server = function(ctx: Karet.Context<{ target: Player }>) ... end`
+export type Context<TArgs = { [string]: any }> = ContextMod.Context<TArgs>
+-- a built-in argument type name ("Player" / "Number" / ...), for Arg.Type
+export type TypeName = Types.TypeName
 export type TypeDefinition = Types.Definition
 export type RateLimit = { MaxCalls: number, Window: number }
 export type ToggleSpec = string | { Key: string, Modifier: string? }
 
+--[=[
+	@interface StartConfig
+	@within Karet
+	.Toggle ToggleSpec? -- key / shortcut to open the terminal, e.g. "Semicolon" or "LeftControl+Semicolon"
+	.Theme (string | ThemePalette)? -- a built-in theme name or a palette
+	.Placement ("Window" | "Top" | "Bottom" | "Middle")? -- where the window / bar sits
+	.Compact boolean? -- single-line command bar instead of the full window
+	.Draggable boolean? -- drag the Window-placement terminal by its title bar
+	.Parent Instance? -- where to mount (defaults to PlayerGui)
+	.Size UDim2? -- override the window size
+	.Position UDim2? -- override the window position
+	.Kaveat boolean? -- enable the Kaveat editor
+	.PromptType ("text" | "window")? -- how Dangerous commands confirm: terminal y/N or an Iris modal
+	.Persist boolean? -- save / load the profile via Pik DataStores
+	.Admin boolean? -- enable the moderation suite (kick / ban / mute / audit + dashboard)
+	.BuiltIns boolean? -- register built-in commands (default true)
+	.Commands (Instance | { Instance } | { CommandDefinition<any> })? -- auto-load command modules: a Folder (required recursively), a list of ModuleScripts, or ready-made defs
+	.DefaultRole string? -- server: default role for players
+	.RateLimit RateLimit? -- server: rate limiting (reserved)
+	.KaveatExec (boolean | (player: Player) -> boolean)? -- server: allow kaveat to run code
+
+	The options table passed to [Karet.Start]. The same shape is used on both realms; each
+	realm reads the options that apply to it.
+]=]
 export type StartConfig = {
 	Toggle: ToggleSpec?, -- key / shortcut to open the terminal, e.g. "Semicolon" or "LeftControl+Semicolon"
 	Theme: (string | ThemePalette)?, -- a built-in theme name or a palette
@@ -97,13 +123,35 @@ export type StartConfig = {
 	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores
 	Admin: boolean?, -- enable the moderation suite (kick/ban/mute/audit + dashboard)
 	BuiltIns: boolean?, -- register built-in commands (default true)
+	Commands: (Instance | { Instance } | { CommandDefinition<any> })?, -- auto-load command modules (Folder, list of ModuleScripts, or ready-made defs)
 	DefaultRole: string?, -- server: default role for players
 	RateLimit: RateLimit?, -- server: rate limiting (reserved)
 	KaveatExec: (boolean | (player: Player) -> boolean)?, -- server: allow kaveat to run code (studio always allowed)
 }
 
+--[=[
+	@class Karet
+
+	The Karet entry point. `require` it on both realms and call [Karet.Start] once per realm:
+
+	```lua
+	local Karet = require(game.ReplicatedStorage.Karet)
+	Karet.Start({ Toggle = "Semicolon", Theme = "tokyonight", Kaveat = true })
+	```
+
+	`Karet` is the product, the terminal surface, and the shell grammar that runs inside it.
+	Register your own commands with [Karet.Command], gate them with the permission hooks, and
+	hook the lifecycle with the middleware hooks. The shell, theme engine, editor and rich
+	output toolkit hang off this table too ([Karet.Shell], [Karet.Theme], ...).
+]=]
 local Karet = {}
 
+--[=[
+	@prop Version string
+	@within Karet
+	@readonly
+	The Karet version string, e.g. `"0.1.0"`.
+]=]
 Karet.Version = "0.1.0"
 
 -- ---------------------------------------------------------------------------
@@ -163,13 +211,28 @@ Karet.WindowManager = WindowManager
 local extensions = Extensions.new()
 Karet.Extensions = extensions
 
--- Register a dockable panel (a named view, usually built with ctx.Window inside Open).
+--[=[
+	@within Karet
+	@function RegisterPanel
+	@tag Commands
+	@param panel Panel
+	@return Panel
+	Register a dockable panel, a named view usually built with `ctx.Window` inside its `Open`.
+	Panels are surfaced by the `panels` command and opened with `open <name>`.
+]=]
 function Karet.RegisterPanel(panel: Extensions.Panel): Extensions.Panel
 	return extensions:registerPanel(panel)
 end
 
--- Register a whole extension: its Commands + Types are wired into Karet, its Panels become
--- openable, and Init(Karet) runs once. The unit that makes Karet a platform.
+--[=[
+	@within Karet
+	@function RegisterExtension
+	@tag Commands
+	@param ext Extension
+	@return Extension
+	Register a whole extension: its `Commands` and `Types` are wired into Karet, its `Panels`
+	become openable, and `Init(Karet)` runs once. This is the unit that makes Karet a platform.
+]=]
 function Karet.RegisterExtension(ext: Extensions.Extension): Extensions.Extension
 	assert(type(ext) == "table" and type(ext.Name) == "string" and ext.Name ~= "", "Karet.RegisterExtension: needs a Name")
 	if ext.Types then
@@ -198,6 +261,13 @@ function Karet.RegisterExtension(ext: Extensions.Extension): Extensions.Extensio
 	return ext
 end
 
+--[=[
+	@within Karet
+	@function Panels
+	@tag Commands
+	@return {Panel}
+	Every registered panel.
+]=]
 function Karet.Panels(): { Extensions.Panel }
 	return extensions:listPanels()
 end
@@ -212,10 +282,27 @@ Karet.Query = query
 -- `(x = ...)` assignments all see the same table. Seed defaults before Karet.Start.
 Karet.Env = {} :: { [string]: any }
 
+--[=[
+	@within Karet
+	@function SetVar
+	@tag Variables
+	@param name string
+	@param value any
+	Set a shell variable. The same value is readable in the shell as `@name`, since this writes
+	straight into the evaluator's scope ([Karet.Env]). Seed defaults before [Karet.Start].
+]=]
 function Karet.SetVar(name: string, value: any)
 	Karet.Env[name] = value
 end
 
+--[=[
+	@within Karet
+	@function GetVar
+	@tag Variables
+	@param name string
+	@return any
+	Read a shell variable (the `@name` store).
+]=]
 function Karet.GetVar(name: string): any
 	return Karet.Env[name]
 end
@@ -224,8 +311,15 @@ end
 Karet.Env.pi = math.pi
 Karet.Env.version = Karet.Version
 
--- Run a line through the shell (alias-expanded). Used by panels/buttons (e.g. the admin
--- dashboard) and available publicly. Returns the chain result, or nil before Start.
+--[=[
+	@within Karet
+	@function Run
+	@tag Output
+	@param line string
+	@return any
+	Run a line through the shell (alias-expanded), exactly as if it had been typed. Returns the
+	chain result `{ ok, returns?, error? }`, or `nil` before [Karet.Start] has run.
+]=]
 function Karet.Run(line: string): any
 	if not Karet.Evaluator then
 		return nil
@@ -238,8 +332,17 @@ function Karet.Run(line: string): any
 	return Karet.Evaluator:run(parsed.ast)
 end
 
--- Pop a transient toast notification on the active terminal. No-op on the server or before a
--- terminal exists. opts: { group, title, duration }. Handy for extensions and admin events.
+--[=[
+	@within Karet
+	@function Toast
+	@tag Output
+	@client
+	@param text string
+	@param opts { group: string?, title: string?, duration: number? }?
+	Pop a transient toast notification on the active terminal. No-op on the server or before a
+	terminal exists. `group` keys into the theme like any output group. Handy for extensions and
+	admin events.
+]=]
 function Karet.Toast(text: string, opts: { [string]: any }?)
 	if Karet.Active then
 		Karet.Active:toast(text, opts)
@@ -269,6 +372,15 @@ local profiles = { default = Profile.new("default") }
 Karet.Profiles = profiles
 Karet.Profile = profiles.default
 
+--[=[
+	@within Karet
+	@function UseProfile
+	@tag Setup
+	@param name string
+	@return Profile
+	Switch the active profile (history, theme, saved kavs, aliases, functions), creating it if
+	it doesn't exist yet. [Karet.Profile] then points at it.
+]=]
 function Karet.UseProfile(name: string): Profile.Profile
 	local p = profiles[name]
 	if not p then
@@ -286,26 +398,72 @@ Karet.Config = {}
 -- command + type registration
 -- ---------------------------------------------------------------------------
 
--- Register a command from a table definition (DESIGN → Command definition).
-function Karet.Register(def: CommandDefinition): CommandDefinition
+--[=[
+	@within Karet
+	@function Command
+	@tag Commands
+	@param name string
+	@param def CommandDefinition
+	@return CommandDefinition
+	Define and register a command. The one way to add a command:
+
+	```lua
+	type BanArgs = { target: Player, reason: string? }
+
+	Karet.Command("ban", {
+	    Network = "Server",
+	    Permission = "Admin",
+	    Args = {
+	        { Name = "target", Type = "Player" },
+	        { Name = "reason", Type = "String", Required = false },
+	    },
+	    Server = function(ctx: Karet.Context<BanArgs>)
+	        -- ctx.Args.target is typed as Player, ctx.Args.reason as string?
+	    end,
+	})
+	```
+
+	Declare the arg record (`BanArgs` here) and annotate the handler's `ctx` with
+	`Karet.Context<...>` to get fully typed, autocompleted `ctx.Args`. See
+	[the commands guide](/docs/commands) for the full shape.
+]=]
+function Karet.Command<TArgs>(name: string, def: CommandDefinition<TArgs>): CommandDefinition<TArgs>
+	def.Name = name
 	return registry:register(def)
 end
 
--- Start the fluent builder: Karet.Command("ban"):Alias("b"):...:Register().
-function Karet.Command(name: string): CommandBuilder
-	return registry:command(name)
-end
-
--- Register a custom argument type (à la Cmdr/Conch).
+--[=[
+	@within Karet
+	@function DefineType
+	@tag Commands
+	@param name string
+	@param def TypeDefinition
+	Register a custom argument type (a la Cmdr). Types parse and validate the raw token into a
+	typed value, and can supply autocomplete.
+]=]
 function Karet.DefineType(name: string, def: TypeDefinition)
 	types:Define(name, def)
 end
 
--- Names of all registered commands, and a single command's definition.
+--[=[
+	@within Karet
+	@function List
+	@tag Commands
+	@return {string}
+	The names of every registered command.
+]=]
 function Karet.List(): { string }
 	return registry:list()
 end
 
+--[=[
+	@within Karet
+	@function Get
+	@tag Commands
+	@param name string
+	@return CommandDefinition?
+	A single command's definition, or nil.
+]=]
 function Karet.Get(name: string): any?
 	return registry:get(name)
 end
@@ -314,31 +472,90 @@ end
 -- auth & roles (server-authoritative)
 -- ---------------------------------------------------------------------------
 
+--[=[
+	@within Karet
+	@function SetRoleHook
+	@tag Permissions
+	@server
+	@param fn (player: Player) -> string
+	Decide a player's role. Roles are compared against a command's `Permission` using the rank
+	ordering from [Karet.SetRoles].
+]=]
 function Karet.SetRoleHook(fn: (player: Player) -> string)
 	auth.roleHook = fn
 end
 
+--[=[
+	@within Karet
+	@function SetAuthHook
+	@tag Permissions
+	@server
+	@param fn (player: Player, command: string) -> boolean?
+	A per-command gate. Return `true` to allow, `false` to deny, or `nil` to fall through to the
+	normal role check.
+]=]
 function Karet.SetAuthHook(fn: (player: Player, command: string) -> boolean?)
 	auth.authHook = fn
 end
 
+--[=[
+	@within Karet
+	@function SetGroupHook
+	@tag Permissions
+	@server
+	@param fn (player: Player) -> number
+	Resolve a player's numeric rank (e.g. a Roblox group rank), for commands that compare against
+	a number.
+]=]
 function Karet.SetGroupHook(fn: (player: Player) -> number)
 	auth.groupHook = fn
 end
 
+--[=[
+	@within Karet
+	@function AllowPlayer
+	@tag Permissions
+	@server
+	@param userId number
+	Allowlist a userId outright.
+]=]
 function Karet.AllowPlayer(userId: number)
 	auth.allowed[userId] = true
 end
 
+--[=[
+	@within Karet
+	@function DenyPlayer
+	@tag Permissions
+	@server
+	@param userId number
+	Denylist a userId outright.
+]=]
 function Karet.DenyPlayer(userId: number)
 	auth.denied[userId] = true
 end
 
+--[=[
+	@within Karet
+	@function SetDefaultRole
+	@tag Permissions
+	@server
+	@param role string
+	The role players get when no role hook is set or it returns nothing.
+]=]
 function Karet.SetDefaultRole(role: string)
 	auth.defaultRole = role
 end
 
--- Define the role -> rank ordering used for Permission comparisons.
+--[=[
+	@within Karet
+	@function SetRoles
+	@tag Permissions
+	@server
+	@param ranks { [string]: number }
+	Define the role -> rank ordering used for `Permission` comparisons, e.g.
+	`{ User = 0, Mod = 50, Admin = 100 }`.
+]=]
 function Karet.SetRoles(ranks: { [string]: number })
 	auth.roleRanks = ranks
 end
@@ -347,18 +564,47 @@ end
 -- middleware
 -- ---------------------------------------------------------------------------
 
+--[=[
+	@within Karet
+	@function PreExecute
+	@tag Middleware
+	@param fn (ctx: Context) -> any?
+	Run before every command. Return `false` to cancel it.
+]=]
 function Karet.PreExecute(fn: (ctx: Context) -> any?)
 	table.insert(hooks.pre, fn)
 end
 
+--[=[
+	@within Karet
+	@function PostExecute
+	@tag Middleware
+	@param fn (ctx: Context, result: any) -> ()
+	Run after every command with its result.
+]=]
 function Karet.PostExecute(fn: (ctx: Context, result: any) -> ())
 	table.insert(hooks.post, fn)
 end
 
+--[=[
+	@within Karet
+	@function OnErr
+	@tag Middleware
+	@param fn (ctx: Context, err: any) -> ()
+	Run when a command errors.
+]=]
 function Karet.OnErr(fn: (ctx: Context, err: any) -> ())
 	table.insert(hooks.onErr, fn)
 end
 
+--[=[
+	@within Karet
+	@function OnConnect
+	@tag Middleware
+	@server
+	@param fn (player: Player) -> ()
+	Run when a player joins.
+]=]
 function Karet.OnConnect(fn: (player: Player) -> ())
 	table.insert(hooks.onConnect, fn)
 end
@@ -1164,10 +1410,76 @@ local function startServer(options: StartConfig)
 	return nil
 end
 
--- Boot Karet. Client → build+wire the terminal and the command evaluator; server → stand
--- up the networking listener + auth pipeline. One `Karet.Start(...)` works in both realms.
+--[=[
+	@within Karet
+	@function Start
+	@tag Setup
+	@param opts StartConfig?
+	@return Terminal?
+	Boot Karet. On the client this builds and wires the terminal and the command evaluator and
+	returns the [Terminal]; on the server it stands up the networking listener and the auth
+	pipeline and returns `nil`. The same call works in both realms.
+
+	```lua
+	Karet.Start({ Toggle = "Semicolon", Theme = "tokyonight", Kaveat = true })
+	```
+]=]
+-- Auto-load commands from Start{ Commands = ... }. Accepts a Folder (require every descendant
+-- ModuleScript), a list of ModuleScripts, or a list of ready-made def tables. A command module is
+-- expected to call Karet.Command(...) at scope, so simply requiring it registers the command; a
+-- plain def table (carrying Name) is registered directly. One bad module/def warns and doesn't
+-- abort the rest. Called from Start on each realm, so Server-network commands register everywhere.
+local function loadCommands(source: any)
+	if source == nil then
+		return
+	end
+
+	local function requireModule(module: Instance)
+		local ok, err = pcall(require, module :: any)
+		if not ok then
+			warn(`karet: failed to load command module '{module:GetFullName()}' - {tostring(err)}`)
+		end
+	end
+
+	-- a Roblox container: require every ModuleScript in it (or itself, if it is one)
+	if typeof(source) == "Instance" then
+		if source:IsA("ModuleScript") then
+			requireModule(source)
+		else
+			for _, descendant in source:GetDescendants() do
+				if descendant:IsA("ModuleScript") then
+					requireModule(descendant)
+				end
+			end
+		end
+		return
+	end
+
+	-- a list: each entry is a ModuleScript to require or a ready-made def to register
+	if type(source) == "table" then
+		local defs = {}
+		for _, entry in source do
+			if typeof(entry) == "Instance" then
+				if entry:IsA("ModuleScript") then
+					requireModule(entry)
+				end
+			elseif type(entry) == "table" then
+				table.insert(defs, entry)
+			end
+		end
+		if #defs > 0 then
+			local _, errors = registry:registerMany(defs)
+			for _, fail in errors do
+				warn(`karet: failed to register command '{fail.name}' - {fail.error}`)
+			end
+		end
+	end
+end
+
 function Karet.Start(opts: StartConfig?): Terminal.Terminal?
 	local options: StartConfig = opts or {}
+	-- register user command modules on both realms before booting the realm-specific surface
+	loadCommands(options.Commands)
 	if RunService:IsClient() then
 		return startClient(options)
 	end
@@ -1777,10 +2089,9 @@ function Commands.build(services: Services): { any }
 			Aliases = { "h", "?" },
 			Description = "list commands, or show one command's details",
 			Network = "Client",
-			Args = { { Name = "command", Types = { "String" }, Required = false } },
-			On = {
-				Client = function(ctx)
-					local rich = ctx.UI.available == true
+			Args = { { Name = "command", Type = "String", Required = false } },
+			Client = function(ctx)
+				local rich = ctx.UI.available == true
 					local which = ctx.Args.command
 					if which then
 						local def = services.get(which)
@@ -1833,8 +2144,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print("commands: " .. table.concat(services.list(), ", "))
 						ctx.Info("type  help <command>  for details")
 					end
-				end,
-			},
+			end,
 		},
 
 		{
@@ -1842,7 +2152,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "cmds" },
 			Description = "list every registered command",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if ctx.UI.available == true then
 					local rows = {}
 					for _, name in services.list() do
@@ -1853,7 +2163,7 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Print(table.concat(services.list(), ", "))
 				end
-			end },
+			end,
 		},
 
 		{
@@ -1861,9 +2171,9 @@ function Commands.build(services: Services): { any }
 			Aliases = { "cls" },
 			Description = "clear the terminal output",
 			Network = "Client",
-			On = { Client = function()
+			Client = function()
 				services.clear()
-			end },
+			end,
 		},
 
 		{
@@ -1871,11 +2181,11 @@ function Commands.build(services: Services): { any }
 			Aliases = { "print" },
 			Description = "print text back",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				ctx.Print(ctx.Args.text)
 				ctx.Return(ctx.Args.text)
-			end },
+			end,
 		},
 
 		{
@@ -1883,18 +2193,18 @@ function Commands.build(services: Services): { any }
 			Aliases = { "ver" },
 			Description = "show the Karet version",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print(`Karet v{services.version}`)
-			end },
+			end,
 		},
 
 		{
 			Name = "time",
 			Description = "show the current time",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print(os.date("%H:%M:%S"))
-			end },
+			end,
 		},
 
 		{
@@ -1902,41 +2212,41 @@ function Commands.build(services: Services): { any }
 			Aliases = { "whoami" },
 			Description = "show your name",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print(services.playerName())
-			end },
+			end,
 		},
 
 		{
 			Name = "ping",
 			Description = "pong",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print("pong")
 				ctx.Return("pong")
-			end },
+			end,
 		},
 
 		{
 			Name = "theme",
 			Description = "switch the active colour theme",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				local ok, err = pcall(services.setTheme, ctx.Args.name)
 				if ok then
 					ctx.Print(`theme set to {ctx.Args.name}`)
 				else
 					ctx.Err(tostring(err))
 				end
-			end },
+			end,
 		},
 
 		{
 			Name = "themes",
 			Description = "list the available themes",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local names = services.listThemes()
 				if ctx.UI.available == true then
 					local rows = {}
@@ -1947,7 +2257,7 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Print(table.concat(names, ", "))
 				end
-			end },
+			end,
 		},
 
 		{
@@ -1955,12 +2265,12 @@ function Commands.build(services: Services): { any }
 			Aliases = { "kav" },
 			Description = "open the script editor",
 			Network = "Client",
-			Args = { { Name = "file", Types = { "String" }, Required = false } },
+			Args = { { Name = "file", Type = "String", Required = false } },
 			Flags = {
 				{ Name = "server", Short = "s", Description = "edit in server context" },
 				{ Name = "client", Short = "c", Description = "edit in client context" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local editor = services.editor and services.editor()
 				if not editor then
 					ctx.Err("kaveat isnt on, start with Kaveat = true")
@@ -1987,7 +2297,7 @@ function Commands.build(services: Services): { any }
 				else
 					editor:open()
 				end
-			end },
+			end,
 		},
 
 		-- ----- config -----
@@ -1997,7 +2307,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "cfg", "settings" },
 			Description = "open the @CONFIG editor (theme, placement, prompt...)",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not (services.editor and services.editor()) then
 					return ctx.Err("config needs Kaveat - start with Karet.Start{ Kaveat = true }")
 				end
@@ -2006,7 +2316,7 @@ function Commands.build(services: Services): { any }
 				end
 				ctx.Info("opening @CONFIG in kaveat (edit values, then :w to apply)")
 				services.openConfig()
-			end },
+			end,
 		},
 
 		{
@@ -2014,7 +2324,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "consts" },
 			Description = "show karet's default constants (fonts, sizes, timings...)",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local d = services.defaults
 				if not d then
 					return ctx.Err("defaults unavailable")
@@ -2047,7 +2357,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{r[1]} = {r[2]}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- extension platform -----
@@ -2056,7 +2366,7 @@ function Commands.build(services: Services): { any }
 			Name = "panels",
 			Description = "list registered panels (open one with: open <name>)",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.panels then
 					return ctx.Err("panels unavailable")
 				end
@@ -2075,15 +2385,15 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{p.Name}  {p.Description or ""}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		{
 			Name = "open",
 			Description = "open a registered panel: open theme",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.panels then
 					return ctx.Err("panels unavailable")
 				end
@@ -2095,7 +2405,7 @@ function Commands.build(services: Services): { any }
 				if not ok then
 					ctx.Err(`panel '{ctx.Args.name}' errored: {tostring(err)}`)
 				end
-			end },
+			end,
 		},
 
 		{
@@ -2103,7 +2413,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "ext" },
 			Description = "list installed extensions",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.extensions then
 					return ctx.Err("extensions unavailable")
 				end
@@ -2122,7 +2432,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{e.Name}  {e.Description or ""}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- aliases -----
@@ -2132,37 +2442,37 @@ function Commands.build(services: Services): { any }
 			Description = "make a command alias: alias ll commands  (then run: ll)",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "command", Types = { "String" }, Required = true },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "command", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.aliases then
 					return ctx.Err("aliases unavailable")
 				end
 				services.aliases.set(ctx.Args.name, ctx.Args.command)
 				ctx.Success(`{ctx.Args.name} -> {ctx.Args.command}`)
-			end },
+			end,
 		},
 
 		{
 			Name = "unalias",
 			Description = "remove a command alias",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.aliases then
 					return ctx.Err("aliases unavailable")
 				end
 				services.aliases.unset(ctx.Args.name)
 				ctx.Info(`removed alias {ctx.Args.name}`)
-			end },
+			end,
 		},
 
 		{
 			Name = "aliases",
 			Description = "list command aliases",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.aliases then
 					return ctx.Err("aliases unavailable")
 				end
@@ -2181,7 +2491,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{n} -> {services.aliases.get(n)}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- functions / macros -----
@@ -2192,10 +2502,10 @@ function Commands.build(services: Services): { any }
 			Description = 'name a sequence of commands: function hi "echo hello; echo there"  (then run: hi)',
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "body", Types = { "String" }, Required = true },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "body", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.functions then
 					return ctx.Err("functions unavailable")
 				end
@@ -2206,7 +2516,7 @@ function Commands.build(services: Services): { any }
 				end
 				services.functions.set(name, ctx.Args.body)
 				ctx.Success(`{name}() defined`)
-			end },
+			end,
 		},
 
 		{
@@ -2214,8 +2524,8 @@ function Commands.build(services: Services): { any }
 			Aliases = { "delfn", "undef" },
 			Description = "remove a function",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.functions then
 					return ctx.Err("functions unavailable")
 				end
@@ -2224,7 +2534,7 @@ function Commands.build(services: Services): { any }
 				end
 				services.functions.unset(ctx.Args.name)
 				ctx.Info(`removed function {ctx.Args.name}`)
-			end },
+			end,
 		},
 
 		{
@@ -2232,7 +2542,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "fns" },
 			Description = "list defined functions and their bodies",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.functions then
 					return ctx.Err("functions unavailable")
 				end
@@ -2251,7 +2561,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{n}() = {services.functions.get(n)}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- environment variables (@name) -----
@@ -2261,24 +2571,24 @@ function Commands.build(services: Services): { any }
 			Description = "set a shell variable: set name value  (read it back as @name)",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "value", Types = { "String" }, Required = true },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "value", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.env then
 					return ctx.Err("env vars unavailable")
 				end
 				services.env.set(ctx.Args.name, coerceValue(ctx.Args.value))
 				ctx.Success(`@{ctx.Args.name} = {ctx.Args.value}`)
-			end },
+			end,
 		},
 
 		{
 			Name = "get",
 			Description = "read a shell variable",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.env then
 					return ctx.Err("env vars unavailable")
 				end
@@ -2289,21 +2599,21 @@ function Commands.build(services: Services): { any }
 					ctx.Print(`@{ctx.Args.name} = {tostring(v)}`)
 					ctx.Return(v)
 				end
-			end },
+			end,
 		},
 
 		{
 			Name = "unset",
 			Description = "remove a shell variable",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.env then
 					return ctx.Err("env vars unavailable")
 				end
 				services.env.unset(ctx.Args.name)
 				ctx.Info(`unset @{ctx.Args.name}`)
-			end },
+			end,
 		},
 
 		{
@@ -2311,7 +2621,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "env" },
 			Description = "list shell variables and their values",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.env then
 					return ctx.Err("env vars unavailable")
 				end
@@ -2330,7 +2640,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{r[1]} = {r[2]}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- info / system -----
@@ -2340,7 +2650,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "hist" },
 			Description = "show recent command history",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local hist = services.history and services.history() or {}
 				local n = #hist
 				if n == 0 then
@@ -2358,7 +2668,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{i}  {hist[i]}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		{
@@ -2366,7 +2676,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "fetch", "about" },
 			Description = "system info card, karet style",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local specs = {
 					{ "user", services.playerName() },
 					{ "shell", "karet " .. services.version },
@@ -2390,7 +2700,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{kv[1]}: {kv[2]}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		{
@@ -2398,7 +2708,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "who" },
 			Description = "list players in the server",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local plrs = game:GetService("Players"):GetPlayers()
 				if #plrs == 0 then
 					return ctx.Info("no players")
@@ -2417,7 +2727,7 @@ function Commands.build(services: Services): { any }
 					ctx.Print(table.concat(names, ", "))
 				end
 				ctx.Return(#plrs)
-			end },
+			end,
 		},
 
 		{
@@ -2425,7 +2735,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "position", "where" },
 			Description = "your character's position",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local plr = services.player and services.player()
 				local char = plr and plr.Character
 				local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -2435,17 +2745,17 @@ function Commands.build(services: Services): { any }
 				local p = root.Position
 				ctx.Print(string.format("%.1f, %.1f, %.1f", p.X, p.Y, p.Z))
 				ctx.Return(p)
-			end },
+			end,
 		},
 
 		{
 			Name = "uptime",
 			Description = "how long this server has been running",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local s = math.floor(time())
 				ctx.Print(string.format("%dh %dm %ds", s // 3600, (s % 3600) // 60, s % 60))
-			end },
+			end,
 		},
 
 		{
@@ -2453,9 +2763,9 @@ function Commands.build(services: Services): { any }
 			Aliases = { "day" },
 			Description = "current date",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print(os.date("%Y-%m-%d %A"))
-			end },
+			end,
 		},
 
 		-- ----- utility -----
@@ -2465,13 +2775,13 @@ function Commands.build(services: Services): { any }
 			Aliases = { "sleep" },
 			Description = "pause for a duration (30s, 1m, ...)",
 			Network = "Client",
-			Args = { { Name = "duration", Types = { "Duration" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "duration", Type = "Duration", Required = true } },
+			Client = function(ctx)
 				local secs = ctx.Args.duration
 				local spin = ctx.Indicator({ type = "spinner", label = `waiting {secs}s` })
 				task.wait(secs)
 				spin:Succeed(`waited {secs}s`)
-			end },
+			end,
 		},
 
 		{
@@ -2480,10 +2790,10 @@ function Commands.build(services: Services): { any }
 			Description = "a random number: random / random max / random min max",
 			Network = "Client",
 			Args = {
-				{ Name = "a", Types = { "Number" }, Required = false },
-				{ Name = "b", Types = { "Number" }, Required = false },
+				{ Name = "a", Type = "Number", Required = false },
+				{ Name = "b", Type = "Number", Required = false },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local a, b = ctx.Args.a, ctx.Args.b
 				local n
 				if a and b then
@@ -2495,19 +2805,19 @@ function Commands.build(services: Services): { any }
 				end
 				ctx.Print(tostring(n))
 				ctx.Return(n)
-			end },
+			end,
 		},
 
 		{
 			Name = "roll",
 			Description = "roll a die (default d6)",
 			Network = "Client",
-			Args = { { Name = "sides", Types = { "Integer" }, Required = false, Default = 6 } },
-			On = { Client = function(ctx)
+			Args = { { Name = "sides", Type = "Integer", Required = false, Default = 6 } },
+			Client = function(ctx)
 				local n = math.random(1, math.max(2, ctx.Args.sides))
 				ctx.Print(`rolled {n}`)
 				ctx.Return(n)
-			end },
+			end,
 		},
 
 		{
@@ -2515,35 +2825,35 @@ function Commands.build(services: Services): { any }
 			Aliases = { "coin" },
 			Description = "flip a coin",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local r = math.random() < 0.5 and "heads" or "tails"
 				ctx.Print(r)
 				ctx.Return(r)
-			end },
+			end,
 		},
 
 		{
 			Name = "upper",
 			Description = "UPPERCASE a string",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				local s = string.upper(ctx.Args.text)
 				ctx.Print(s)
 				ctx.Return(s)
-			end },
+			end,
 		},
 
 		{
 			Name = "lower",
 			Description = "lowercase a string",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				local s = string.lower(ctx.Args.text)
 				ctx.Print(s)
 				ctx.Return(s)
-			end },
+			end,
 		},
 
 		{
@@ -2551,12 +2861,12 @@ function Commands.build(services: Services): { any }
 			Aliases = { "length" },
 			Description = "length of a string",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				local n = utf8.len(ctx.Args.text) or #ctx.Args.text
 				ctx.Print(tostring(n))
 				ctx.Return(n)
-			end },
+			end,
 		},
 
 		{
@@ -2564,12 +2874,12 @@ function Commands.build(services: Services): { any }
 			Aliases = { "rev" },
 			Description = "reverse a string",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				local s = string.reverse(ctx.Args.text)
 				ctx.Print(s)
 				ctx.Return(s)
-			end },
+			end,
 		},
 
 		{
@@ -2578,26 +2888,26 @@ function Commands.build(services: Services): { any }
 			Description = "repeat a string n times",
 			Network = "Client",
 			Args = {
-				{ Name = "text", Types = { "String" }, Required = true },
-				{ Name = "times", Types = { "Integer" }, Required = false, Default = 2 },
+				{ Name = "text", Type = "String", Required = true },
+				{ Name = "times", Type = "Integer", Required = false, Default = 2 },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local s = string.rep(ctx.Args.text, math.clamp(ctx.Args.times, 1, 100))
 				ctx.Print(s)
 				ctx.Return(s)
-			end },
+			end,
 		},
 
 		{
 			Name = "count",
 			Description = "count matched players (count all / count me / ...)",
 			Network = "Client",
-			Args = { { Name = "players", Types = { "Players" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "players", Type = "Players", Required = true } },
+			Client = function(ctx)
 				local n = #ctx.Args.players
 				ctx.Print(tostring(n))
 				ctx.Return(n)
-			end },
+			end,
 		},
 
 		{
@@ -2605,27 +2915,27 @@ function Commands.build(services: Services): { any }
 			Aliases = { "say" },
 			Description = "echo a highlighted message",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				ctx.Success(ctx.Args.text)
-			end },
+			end,
 		},
 
 		{
 			Name = "toast",
 			Description = "pop a transient toast notification: toast \"saved\" --group=Success",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			Args = { { Name = "text", Type = "String", Required = true } },
 			Modifiers = {
-				{ Name = "group", Types = { "String" }, Default = "Output", Description = "theme group (Success/Warn/Error/Info)" },
-				{ Name = "title", Types = { "String" }, Default = "karet", Description = "the toast's title line" },
+				{ Name = "group", Type = "String", Default = "Output", Description = "theme group (Success/Warn/Error/Info)" },
+				{ Name = "title", Type = "String", Default = "karet", Description = "the toast's title line" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if ctx.UI.available ~= true then
 					return ctx.Info(ctx.Args.text)
 				end
 				ctx.UI.Toast(ctx.Args.text, { group = ctx.Modifiers.group, title = ctx.Modifiers.title })
-			end },
+			end,
 		},
 	}
 
@@ -2649,10 +2959,10 @@ function Commands.build(services: Services): { any }
 			Name = name,
 			Description = desc,
 			Network = "Client",
-			Args = { { Name = "n", Types = { "Number" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "n", Type = "Number", Required = true } },
+			Client = function(ctx)
 				emit(ctx, fn(ctx.Args.n))
-			end },
+			end,
 		})
 	end
 
@@ -2663,12 +2973,12 @@ function Commands.build(services: Services): { any }
 			Description = desc,
 			Network = "Client",
 			Args = {
-				{ Name = "a", Types = { "Number" }, Required = true },
-				{ Name = "b", Types = { "Number" }, Required = true },
+				{ Name = "a", Type = "Number", Required = true },
+				{ Name = "b", Type = "Number", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				emit(ctx, fn(ctx.Args.a, ctx.Args.b))
-			end },
+			end,
 		})
 	end
 
@@ -2678,10 +2988,10 @@ function Commands.build(services: Services): { any }
 			Name = name,
 			Description = desc,
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				emit(ctx, fn(ctx.Args.text))
-			end },
+			end,
 		})
 	end
 
@@ -2692,18 +3002,18 @@ function Commands.build(services: Services): { any }
 			Description = desc,
 			Network = "Client",
 			Args = {
-				{ Name = "a", Types = { "String" }, Required = true },
-				{ Name = "b", Types = { "String" }, Required = true },
+				{ Name = "a", Type = "String", Required = true },
+				{ Name = "b", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				emit(ctx, fn(ctx.Args.a, ctx.Args.b))
-			end },
+			end,
 		})
 	end
 
 	-- no args
 	local function plain(name: string, desc: string, fn: (any) -> ())
-		add({ Name = name, Description = desc, Network = "Client", On = { Client = fn } })
+		add({ Name = name, Description = desc, Network = "Client", Client = fn })
 	end
 
 	-- math (one number) --------------------------------------------------------
@@ -2911,13 +3221,13 @@ function Commands.build(services: Services): { any }
 			Description = "run a command N times: repc jump 200  (pace it with --delay=0.5)",
 			Network = "Client",
 			Args = {
-				{ Name = "command", Types = { "String" }, Required = true },
-				{ Name = "times", Types = { "Integer" }, Required = true },
+				{ Name = "command", Type = "String", Required = true },
+				{ Name = "times", Type = "Integer", Required = true },
 			},
 			Modifiers = {
-				{ Name = "delay", Types = { "Number" }, Default = 0, Description = "seconds between runs" },
+				{ Name = "delay", Type = "Number", Default = 0, Description = "seconds between runs" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local line = ctx.Args.command
 				local maxTimes = (services.defaults and services.defaults.Repeat.MaxTimes) or 10000
 				local times = math.clamp(ctx.Args.times, 1, maxTimes)
@@ -2940,7 +3250,7 @@ function Commands.build(services: Services): { any }
 					ind:Succeed(`{line}: ran {times}x`)
 				end
 				ctx.Return(times - fails)
-			end },
+			end,
 		})
 	end
 
@@ -2953,10 +3263,10 @@ function Commands.build(services: Services): { any }
 			Description = "run a command on a loop: every 5s jump  (stop it with: stop <id>)",
 			Network = "Client",
 			Args = {
-				{ Name = "interval", Types = { "Duration" }, Required = true },
-				{ Name = "command", Types = { "String" }, Required = true },
+				{ Name = "interval", Type = "Duration", Required = true },
+				{ Name = "command", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local interval = math.max(0.1, ctx.Args.interval)
 				local line = ctx.Args.command
 				local running = true
@@ -2975,7 +3285,7 @@ function Commands.build(services: Services): { any }
 				end)
 				ctx.Success(`job {id} started: every {interval}s {line}`)
 				ctx.Return(id)
-			end },
+			end,
 		})
 		add({
 			Name = "watch",
@@ -2983,16 +3293,16 @@ function Commands.build(services: Services): { any }
 			Description = 'run a command when an expressions value changes: watch health "notify ouch"',
 			Network = "Client",
 			Args = {
-				{ Name = "expr", Types = { "String" }, Required = true },
-				{ Name = "command", Types = { "String" }, Required = true },
+				{ Name = "expr", Type = "String", Required = true },
+				{ Name = "command", Type = "String", Required = true },
 			},
 			Modifiers = {
-				{ Name = "interval", Types = { "Number" }, Default = 0.5, Description = "seconds between polls" },
+				{ Name = "interval", Type = "Number", Default = 0.5, Description = "seconds between polls" },
 			},
 			Flags = {
 				{ Name = "immediate", Short = "i", Description = "also run once right away" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local interval = math.max(0.1, ctx.Modifiers.interval or 0.5)
 				local expr = ctx.Args.expr
 				local line = ctx.Args.command
@@ -3031,13 +3341,13 @@ function Commands.build(services: Services): { any }
 				end)
 				ctx.Success(`job {id} watching {expr}`)
 				ctx.Return(id)
-			end },
+			end,
 		})
 		add({
 			Name = "jobs",
 			Description = "list running background jobs",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local list = jobs.list()
 				if #list == 0 then
 					return ctx.Info("no running jobs")
@@ -3059,15 +3369,15 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{j.id}  {j.label}`)
 					end
 				end
-			end },
+			end,
 		})
 		add({
 			Name = "stop",
 			Aliases = { "kill" },
 			Description = "stop a job by id, or `stop all`",
 			Network = "Client",
-			Args = { { Name = "id", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "id", Type = "String", Required = true } },
+			Client = function(ctx)
 				if string.lower(ctx.Args.id) == "all" then
 					jobs.stopAll()
 					return ctx.Success("stopped all jobs")
@@ -3078,7 +3388,7 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Warn(`no job {ctx.Args.id}`)
 				end
-			end },
+			end,
 		})
 	end
 
@@ -3091,25 +3401,25 @@ function Commands.build(services: Services): { any }
 			Description = 'pin a value to the on-screen HUD: pin health  /  pin (@hp) hp --interval=1',
 			Network = "Client",
 			Args = {
-				{ Name = "expr", Types = { "String" }, Required = true },
-				{ Name = "label", Types = { "String" }, Required = false },
+				{ Name = "expr", Type = "String", Required = true },
+				{ Name = "label", Type = "String", Required = false },
 			},
 			Modifiers = {
-				{ Name = "interval", Types = { "Number" }, Default = 0.5, Description = "seconds between samples" },
+				{ Name = "interval", Type = "Number", Default = 0.5, Description = "seconds between samples" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local id = hud.add(ctx.Args.expr, ctx.Args.label, ctx.Modifiers.interval)
 				ctx.Success(`pinned #{id}: {ctx.Args.label or ctx.Args.expr}`)
 				ctx.Return(id)
-			end },
+			end,
 		})
 		add({
 			Name = "unpin",
 			Aliases = { "unhud" },
 			Description = "remove a HUD watch by id, or `unpin all`",
 			Network = "Client",
-			Args = { { Name = "id", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "id", Type = "String", Required = true } },
+			Client = function(ctx)
 				if string.lower(ctx.Args.id) == "all" then
 					hud.clear()
 					return ctx.Success("cleared the HUD")
@@ -3120,14 +3430,14 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Warn(`no HUD watch {ctx.Args.id}`)
 				end
-			end },
+			end,
 		})
 		add({
 			Name = "pins",
 			Aliases = { "huds" },
 			Description = "list the pinned HUD watches",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local list = hud.list()
 				if #list == 0 then
 					return ctx.Info("nothing pinned (try: pin health)")
@@ -3142,7 +3452,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`#{w.id}  {w.label}  ({w.expr})`)
 					end
 				end
-			end },
+			end,
 		})
 	end
 
@@ -3154,8 +3464,8 @@ function Commands.build(services: Services): { any }
 			Aliases = { "console" },
 			Description = "mirror the game's print/warn/error into the terminal: logs on|off",
 			Network = "Client",
-			Args = { { Name = "mode", Types = { "String" }, Required = false } },
-			On = { Client = function(ctx)
+			Args = { { Name = "mode", Type = "String", Required = false } },
+			Client = function(ctx)
 				local mode = ctx.Args.mode and string.lower(ctx.Args.mode) or (lc.isOn() and "off" or "on")
 				if mode == "on" then
 					lc.on()
@@ -3166,7 +3476,7 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Warn("usage: logs on | off")
 				end
-			end },
+			end,
 		})
 	end
 
@@ -3179,16 +3489,16 @@ function Commands.build(services: Services): { any }
 			Description = "increment a numeric variable",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "by", Types = { "Number" }, Required = false, Default = 1 },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "by", Type = "Number", Required = false, Default = 1 },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local v = tonumber(env.get(ctx.Args.name)) or 0
 				v += ctx.Args.by
 				env.set(ctx.Args.name, v)
 				ctx.Success(`@{ctx.Args.name} = {v}`)
 				ctx.Return(v)
-			end },
+			end,
 		})
 		add({
 			Name = "decr",
@@ -3196,30 +3506,30 @@ function Commands.build(services: Services): { any }
 			Description = "decrement a numeric variable",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "by", Types = { "Number" }, Required = false, Default = 1 },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "by", Type = "Number", Required = false, Default = 1 },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local v = tonumber(env.get(ctx.Args.name)) or 0
 				v -= ctx.Args.by
 				env.set(ctx.Args.name, v)
 				ctx.Success(`@{ctx.Args.name} = {v}`)
 				ctx.Return(v)
-			end },
+			end,
 		})
 		add({
 			Name = "append",
 			Description = "append text to a variable",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "text", Types = { "String" }, Required = true },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "text", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local v = tostring(env.get(ctx.Args.name) or "") .. ctx.Args.text
 				env.set(ctx.Args.name, v)
 				ctx.Success(`@{ctx.Args.name} = {v}`)
-			end },
+			end,
 		})
 	end
 
@@ -3238,23 +3548,23 @@ function Commands.build(services: Services): { any }
 		Aliases = { "ws", "speed" },
 		Description = "set your walk speed",
 		Network = "Client",
-		Args = { { Name = "speed", Types = { "Number" }, Required = true } },
-		On = { Client = function(ctx)
+		Args = { { Name = "speed", Type = "Number", Required = true } },
+		Client = function(ctx)
 			local char = withChar(ctx)
 			local hum = char and char:FindFirstChildOfClass("Humanoid")
 			if hum then
 				hum.WalkSpeed = ctx.Args.speed
 				ctx.Success(`walkspeed = {ctx.Args.speed}`)
 			end
-		end },
+		end,
 	})
 	add({
 		Name = "jumppower",
 		Aliases = { "jp" },
 		Description = "set your jump power",
 		Network = "Client",
-		Args = { { Name = "power", Types = { "Number" }, Required = true } },
-		On = { Client = function(ctx)
+		Args = { { Name = "power", Type = "Number", Required = true } },
+		Client = function(ctx)
 			local char = withChar(ctx)
 			local hum = char and char:FindFirstChildOfClass("Humanoid")
 			if hum then
@@ -3262,7 +3572,7 @@ function Commands.build(services: Services): { any }
 				hum.JumpPower = ctx.Args.power
 				ctx.Success(`jumppower = {ctx.Args.power}`)
 			end
-		end },
+		end,
 	})
 	plain("jump", "make your character jump", function(ctx)
 		local char = withChar(ctx)
@@ -3292,7 +3602,7 @@ function Commands.build(services: Services): { any }
 		Aliases = { "panel" },
 		Description = "open a control-panel window (walkspeed / jump / respawn)",
 		Network = "Client",
-		On = { Client = function(ctx)
+		Client = function(ctx)
 			local plr = services.player and services.player()
 			local w = ctx.Window({ title = "controls" })
 			w:Label("character")
@@ -3317,7 +3627,7 @@ function Commands.build(services: Services): { any }
 				w:Close()
 			end)
 			ctx.Info("opened the controls window")
-		end },
+		end,
 	})
 
 	return defs
@@ -3508,6 +3818,22 @@ local _8 = mod("Context", _1, [[
 -- which the terminal/console provides. ctx.Abort cancels mid-handler by raising a tagged
 -- error the Host catches - so it unwinds the handler cleanly without a magic return value.
 
+--[=[
+	@class Context
+
+	The `ctx` object passed to every command handler. It carries the resolved input (`Args`,
+	`Flags`, `Modifiers`, `Input`), themed output methods (`Print`, `Success`, `Err`, ...), the
+	return pool (`Return`), and the rich surfaces (`UI`, `Window`, `Indicator`).
+
+	```lua
+	On = { Server = function(ctx)
+	    local who = ctx.Args.who
+	    if ctx.Flags.silent then return end
+	    ctx.Success(`hi {who.Name}`)
+	    ctx.Return(who)
+	end }
+	```
+]=]
 local Context = {}
 
 -- A unique tag so the Host can tell an intentional Abort from a real Lua error.
@@ -3579,11 +3905,13 @@ export type Control = {
 }
 
 -- The handler-facing ctx surface (typed so editors autocomplete ctx.* in your handlers).
-export type Context = {
+-- TArgs is the per-command arg record you declare (e.g. { target: Player, reason: string? }), so
+-- ctx.Args.target comes out fully typed. Defaults to a loose map for commands with no arg type.
+export type Context<TArgs = { [string]: any }> = {
 	Player: Player?,
 	Command: string,
 	RawInput: string?,
-	Args: { [string]: any },
+	Args: TArgs,
 	Flags: { [string]: boolean }, -- boolean toggles: -s / -p
 	Modifiers: { [string]: any }, -- valued long options: --name=value
 	Input: any, -- piped input from the previous command (a | b), or nil
@@ -3623,6 +3951,37 @@ function Context.new(opts: Options): (any, Control)
 	local committedPayload: any = nil
 	local abortMsg: string? = nil
 
+	--[=[
+		@prop Args { [string]: any }
+		@within Context
+		The resolved, type-checked positional arguments, keyed by name.
+	]=]
+	--[=[
+		@prop Flags { [string]: boolean }
+		@within Context
+		Boolean toggles set with `-s` / `-p`.
+	]=]
+	--[=[
+		@prop Modifiers { [string]: any }
+		@within Context
+		Valued long options: `--reason=spam` -> `ctx.Modifiers.reason`.
+	]=]
+	--[=[
+		@prop Input any
+		@within Context
+		The piped value from the previous command in a pipeline (`a | b`), or nil.
+	]=]
+	--[=[
+		@prop Player Player?
+		@within Context
+		The calling player (nil in Studio / no-player contexts).
+	]=]
+	--[=[
+		@prop UI { [string]: any }
+		@within Context
+		The rich-output toolkit: `ctx.UI.Table{}`, `ctx.UI.Toast()`, `ctx.UI.Link()`, ... A no-op
+		off the terminal.
+	]=]
 	local ctx = {
 		Player = opts.player,
 		Command = opts.command,
@@ -3641,6 +4000,13 @@ function Context.new(opts: Options): (any, Control)
 		UI = opts.ui or NOOP_UI, -- rich output: ctx.UI.Table{...}, ctx.UI.Panel(...), ...
 	}
 
+	--[=[
+		@within Context
+		@method Print
+		@param message any
+		Print a line of normal output. `Success`, `Warn`, `Err`, `Info`, `Hint` and `Reply` are the
+		same but route to their own theme groups.
+	]=]
 	function ctx.Print(message: any)
 		opts.sink("Output", tostring(message))
 	end
@@ -3672,6 +4038,13 @@ function Context.new(opts: Options): (any, Control)
 
 	-- Push return values, matched positionally to the command's Returns schema by the
 	-- evaluator/pool. Nils are preserved as real slots.
+	--[=[
+		@within Context
+		@method Return
+		@param ... any
+		Push return values into the pool, matched positionally to the command's `Returns` schema.
+		These feed `/` references, pipelines (`a | b`), and `Karet.Run`'s result. Nils are preserved.
+	]=]
 	function ctx.Return(...)
 		local packed = table.pack(...)
 		for i = 1, packed.n do
@@ -3702,7 +4075,13 @@ function Context.new(opts: Options): (any, Control)
 		return NOOP_WINDOW
 	end
 
-	-- Cancel mid-handler with a message.
+	--[=[
+		@within Context
+		@method Abort
+		@param message string?
+		Cancel the handler mid-run with a message. The command's result becomes `{ ok = false }`,
+		so chains (`a && b`) see the failure. Unwinds cleanly via a tagged error.
+	]=]
 	function ctx.Abort(message: string?)
 		abortMsg = message or "aborted"
 		error({ [ABORT] = true, message = abortMsg }, 0)
@@ -25311,18 +25690,43 @@ local _23 = mod("Registry", _1, [[
 local Registry = {}
 Registry.__index = Registry
 
-export type NetworkKind = "Shared" | "Client" | "Server" | "Context"
-export type Handler = (ctx: any, payload: any?) -> ()
+local Context = require(script.Parent.Context)
+local Types = require(script.Parent.Types)
 
-export type Arg = { Name: string, Types: { string }, Required: boolean?, Default: any? }
+export type NetworkKind = "Shared" | "Client" | "Server" | "Context"
+
+-- A typed command handler. TArgs is the command's arg record, so ctx.Args comes out fully typed
+-- (ctx.Args.target : Player) instead of any. Defaults to a loose map for untyped commands.
+export type Handler<TArgs = { [string]: any }> = (ctx: Context.Context<TArgs>, payload: any?) -> ()
+
+-- One positional argument. You write `Type` (a built-in type name, or a list of names tried in
+-- order, first that parses+validates wins). For a custom Karet.DefineType type, write
+-- `Type = "MyType" :: any`. `Types` is the engine-canonical array the normalizer fills in.
+export type Arg = {
+	Name: string,
+	Type: (Types.TypeName | { Types.TypeName })?,
+	Types: { string }?,
+	Required: boolean?,
+	Default: any?,
+	Description: string?,
+}
 -- boolean toggles: -s / -p (stackable shorts), declared per command
 export type Flag = { Name: string, Short: string?, Description: string? }
 -- valued long options: --delay=2 / --label=hi, optionally typed + defaulted
-export type Modifier = { Name: string, Types: { string }?, Default: any?, Description: string? }
+export type Modifier = {
+	Name: string,
+	Type: (Types.TypeName | { Types.TypeName })?,
+	Types: { string }?,
+	Default: any?,
+	Description: string?,
+}
 export type Return = { Name: string, Type: string }
 
-export type Definition = {
-	Name: string,
+-- A command definition. `Name` is supplied as the first arg to Karet.Command (or carried in the
+-- table for folder auto-load). Handlers are the top-level Server/Client/Shared fields; TArgs threads
+-- your arg record into each handler's ctx. `On` is the engine-canonical form the normalizer fills.
+export type Definition<TArgs = { [string]: any }> = {
+	Name: string?,
 	Aliases: { string }?,
 	Description: string?,
 	Network: NetworkKind?,
@@ -25332,26 +25736,48 @@ export type Definition = {
 	Flags: { Flag }?,
 	Modifiers: { Modifier }?,
 	Returns: { Return }?,
-	On: { Client: Handler?, Server: Handler?, Shared: Handler? }?,
-}
-
--- The fluent builder surface (so editors autocomplete the chain).
-export type Builder = {
-	Alias: (self: Builder, ...string) -> Builder,
-	Description: (self: Builder, text: string) -> Builder,
-	Network: (self: Builder, kind: NetworkKind) -> Builder,
-	Permission: (self: Builder, role: string) -> Builder,
-	Dangerous: (self: Builder, flag: boolean?) -> Builder,
-	Arg: (self: Builder, arg: Arg) -> Builder,
-	Flag: (self: Builder, flag: Flag) -> Builder,
-	Modifier: (self: Builder, modifier: Modifier) -> Builder,
-	Return: (self: Builder, ret: Return) -> Builder,
-	On: (self: Builder, realm: NetworkKind, handler: Handler) -> Builder,
-	Register: (self: Builder) -> Definition,
+	Server: Handler<TArgs>?,
+	Client: Handler<TArgs>?,
+	Shared: Handler<TArgs>?,
+	On: { Client: Handler<TArgs>?, Server: Handler<TArgs>?, Shared: Handler<TArgs>? }?,
 }
 
 local VALID_NETWORK = { Shared = true, Client = true, Server = true, Context = true }
 
+-- Fold the public def shape into the engine's canonical record, in place: top-level Server/Client/
+-- Shared handlers move under `On`, and each arg/modifier's `Type` becomes the `Types` array the
+-- evaluator coerces against. Already-canonical defs (On/Types set directly) pass through untouched.
+local function normalize(def: Definition)
+	local on = def.On or {}
+	if def.Server then
+		on.Server = def.Server
+	end
+	if def.Client then
+		on.Client = def.Client
+	end
+	if def.Shared then
+		on.Shared = def.Shared
+	end
+	def.On = on
+
+	local function fillTypes(specs: { any }?)
+		for _, spec in specs or {} do
+			if spec.Type ~= nil and spec.Types == nil then
+				spec.Types = (type(spec.Type) == "table" and spec.Type) or { spec.Type }
+			end
+		end
+	end
+	fillTypes(def.Args)
+	fillTypes(def.Modifiers)
+end
+
+--[=[
+	@class Registry
+
+	Holds the command definitions, keyed by name (case-insensitive) with alias resolution. One
+	registry is shared across both realms. You usually go through [Karet.Command] rather than
+	touching this directly.
+]=]
 function Registry.new()
 	return setmetatable({
 		commands = {} :: { [string]: Definition }, -- keyed by lowercase Name
@@ -25360,19 +25786,28 @@ function Registry.new()
 end
 
 local function validate(def: Definition)
-	assert(type(def.Name) == "string" and def.Name ~= "", "Karet.Register: a command needs a Name")
+	assert(type(def.Name) == "string" and def.Name ~= "", "Karet.Command: a command needs a Name")
 	local network = def.Network or "Shared"
-	assert(VALID_NETWORK[network], `Karet.Register('{def.Name}'): invalid Network '{network}'`)
-	assert(type(def.On) == "table", `Karet.Register('{def.Name}'): handlers must live under an On table`)
+	assert(VALID_NETWORK[network], `Karet.Command('{def.Name}'): invalid Network '{network}'`)
+	local on = def.On or {}
 	if network == "Context" then
-		assert(def.On.Client and def.On.Server, `'{def.Name}' is a Context command and needs both On.Client and On.Server`)
+		assert(on.Client and on.Server, `'{def.Name}' is a Context command and needs both a Client and a Server handler`)
 	else
-		assert(def.On[network] or def.On.Shared, `'{def.Name}' (Network '{network}') needs an On.{network} handler`)
+		assert(on[network] or on.Shared, `'{def.Name}' (Network '{network}') needs a {network} (or Shared) handler`)
 	end
 end
 
--- Register a command from a table definition. Returns the stored definition.
+--[=[
+	@within Registry
+	@method register
+	@param def Definition
+	@return Definition
+	Register a command from a table definition. The def is normalized (top-level Server/Client/Shared
+	handlers folded into `On`, each arg's `Type` expanded into `Types`) then validated. Returns the
+	stored definition.
+]=]
 function Registry:register(def: Definition): Definition
+	normalize(def)
 	validate(def)
 	local key = string.lower(def.Name)
 	self.commands[key] = def
@@ -25380,6 +25815,24 @@ function Registry:register(def: Definition): Definition
 		self.aliases[string.lower(alias)] = key
 	end
 	return def
+end
+
+-- Register a list of def tables, isolating failures so one bad command doesn't sink the batch
+-- (used by the folder auto-loader). Returns the names that registered and a list of the ones that
+-- threw, each as { name, error }.
+function Registry:registerMany(defs: { Definition }): ({ string }, { { name: string, error: string } })
+	local ok, errors = {}, {}
+	for _, def in defs do
+		local success, result = pcall(function()
+			return self:register(def)
+		end)
+		if success then
+			table.insert(ok, def.Name)
+		else
+			table.insert(errors, { name = tostring(type(def) == "table" and def.Name or def), error = tostring(result) })
+		end
+	end
+	return ok, errors
 end
 
 -- Drop a command (and any of its aliases) from the registry. used by the function/macro
@@ -25399,7 +25852,13 @@ function Registry:unregister(name: string)
 	end
 end
 
--- Resolve a name or alias to a definition (case-insensitive).
+--[=[
+	@within Registry
+	@method get
+	@param name string
+	@return Definition?
+	Resolve a name or alias to a definition (case-insensitive).
+]=]
 function Registry:get(name: string): Definition?
 	local key = string.lower(name)
 	local direct = self.commands[key]
@@ -25414,7 +25873,12 @@ function Registry:has(name: string): boolean
 	return self:get(name) ~= nil
 end
 
--- All registered command names, sorted.
+--[=[
+	@within Registry
+	@method list
+	@return {string}
+	All registered command names, sorted.
+]=]
 function Registry:list(): { string }
 	local names = {}
 	for _, def in self.commands do
@@ -25422,77 +25886,6 @@ function Registry:list(): { string }
 	end
 	table.sort(names)
 	return names
-end
-
--- ---------------------------------------------------------------------------
--- fluent builder - sugar that accumulates a Definition then :Register()s it
--- ---------------------------------------------------------------------------
-
-local Builder = {}
-Builder.__index = Builder
-
-function Registry:command(name: string): Builder
-	return setmetatable({
-		registry = self,
-		def = { Name = name, Aliases = {}, Args = {}, Flags = {}, Modifiers = {}, Returns = {}, On = {} } :: Definition,
-	}, Builder) :: any
-end
-
-function Builder:Alias(...: string)
-	for _, a in { ... } do
-		table.insert(self.def.Aliases, a)
-	end
-	return self
-end
-
-function Builder:Description(text: string)
-	self.def.Description = text
-	return self
-end
-
-function Builder:Network(kind: string)
-	self.def.Network = kind
-	return self
-end
-
-function Builder:Permission(role: string)
-	self.def.Permission = role
-	return self
-end
-
--- Mark the command dangerous so it asks for confirmation before running.
-function Builder:Dangerous(flag: boolean?)
-	self.def.Dangerous = flag ~= false
-	return self
-end
-
-function Builder:Arg(arg: Arg)
-	table.insert(self.def.Args, arg)
-	return self
-end
-
-function Builder:Flag(flag: Flag)
-	table.insert(self.def.Flags, flag)
-	return self
-end
-
-function Builder:Modifier(modifier: Modifier)
-	table.insert(self.def.Modifiers, modifier)
-	return self
-end
-
-function Builder:Return(ret: Return)
-	table.insert(self.def.Returns, ret)
-	return self
-end
-
-function Builder:On(realm: string, handler: (...any) -> ())
-	self.def.On[realm] = handler
-	return self
-end
-
-function Builder:Register(): Definition
-	return self.registry:register(self.def)
 end
 
 return Registry
@@ -35307,8 +35700,23 @@ local COMPACT_PLACEMENTS = {
 	Middle = { Anchor = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(560, BAR_H) },
 }
 
--- opts: { Compact = boolean?, Placement = string?, Parent = Instance?, Size = UDim2?,
---         Position = UDim2?, Draggable = boolean? }
+--[=[
+	@class Terminal
+	@client
+
+	The visible console surface: window chrome, the scrolling output log, the input row, plus the
+	toast stack and the live HUD. Driven entirely from the active [Theme] (recolours live). You
+	get the active one back from [Karet.Start] on the client, or as `Karet.Active`.
+
+	Two presentations: the full window (default) and a single-line `Compact` command bar.
+]=]
+--[=[
+	@within Terminal
+	@function new
+	@param opts { Compact: boolean?, Placement: string?, Parent: Instance?, Size: UDim2?, Position: UDim2?, Draggable: boolean? }?
+	@return Terminal
+	Construct a terminal. [Karet.Start] does this for you; call it directly only for a custom setup.
+]=]
 function Terminal.new(opts: { [string]: any }?)
 	local self = setmetatable({}, Terminal)
 	local options = opts or {}
@@ -35857,8 +36265,14 @@ function Terminal:applyTheme(palette: { [string]: Color3 })
 	self:colorPromptModal()
 end
 
--- Pop a transient toast notification (works whether the window is open or closed).
--- opts: { group, title, duration }. group keys into the theme like any output group.
+--[=[
+	@within Terminal
+	@method toast
+	@param text string
+	@param opts { group: string?, title: string?, duration: number? }?
+	Pop a transient toast notification. Works whether the window is open or closed (the stack
+	lives on the ScreenGui). `group` keys into the theme like any output group.
+]=]
 function Terminal:toast(text: string, opts: { [string]: any }?)
 	if self.toaster then
 		self.toaster:push(text, opts)
@@ -35916,6 +36330,11 @@ end
 -- open / close lifecycle
 -- ---------------------------------------------------------------------------
 
+--[=[
+	@within Terminal
+	@method open
+	Show the terminal and capture input focus.
+]=]
 function Terminal:open()
 	if self.isOpen then
 		return
@@ -35944,6 +36363,11 @@ function Terminal:close()
 	end
 end
 
+--[=[
+	@within Terminal
+	@method toggle
+	Open the terminal if closed, close it if open.
+]=]
 function Terminal:toggle()
 	if self.isOpen then
 		self:close()
@@ -36034,6 +36458,14 @@ end
 -- output API
 -- ---------------------------------------------------------------------------
 
+--[=[
+	@within Terminal
+	@method print
+	@param text string
+	@param group string?
+	Print a line to the output log, coloured by a theme group (defaults to `"Output"`). `error`,
+	`warn`, `info` and `success` are shorthands for their groups.
+]=]
 function Terminal:print(text: string, group: string?)
 	self:emit(group or "Output", text)
 end
@@ -37433,8 +37865,34 @@ local _34 = mod("Theme", _1, [[
 -- This module uses Roblox datatypes (Color3) and is intended to run in-engine; the
 -- headless lune test suite loads only src/Shell, so it never imports this file.
 
+--[=[
+	@class Theme
+
+	One semantic colorscheme, piped through every Karet surface (terminal, Kaveat editor,
+	autocomplete, pickers, windows). A theme is not a set of raw frame colours, it's a set of
+	semantic highlight **groups** ([Group]) the way a Neovim colorscheme is, so
+	`Theme.Set("gruvbox")` recolours the whole UI at once.
+
+	Authors may define a *partial* palette: any group left out is derived from the ones present
+	(Surface lightens Background, Prompt follows Accent, ...), so a minimal theme still produces
+	a complete, coherent [Palette]. Reach it as `Karet.Theme`.
+
+	```lua
+	Karet.Theme.Define("midnight", { Background = Color3.fromHex("0b0e14"), Accent = Color3.fromHex("7aa2f7") })
+	Karet.Theme.Set("midnight")
+	```
+]=]
 local Theme = {}
 
+--[=[
+	@type Group string
+	@within Theme
+	One semantic highlight group. The full set covers surfaces (`Background`, `Surface`,
+	`Foreground`, `Muted`, `Border`, `Selection`), accents (`Accent`, `AccentAlt`), syntax
+	(`Command`, `Keyword`, `String`, `Number`, `Comment`, `Operator`, `Variable`, `Type`, ...),
+	diagnostics (`Error`, `Warn`, `Info`, `Hint`, `Success`) and terminal roles (`Prompt`,
+	`Output`, ...). See [Theme.Groups] for the canonical list.
+]=]
 -- The full set of semantic groups. Adding a member here makes it themable everywhere;
 -- the deriver (below) must know how to fill it when an author omits it.
 export type Group =
@@ -37478,6 +37936,12 @@ export type Group =
 	| "Match" -- fuzzy-match highlight in completion lists
 	| "Output" -- normal command output text
 
+--[=[
+	@type Palette { [Group]: Color3 }
+	@within Theme
+	A map from [Group] to colour. May be partial when defining a theme (missing groups are
+	derived); [Theme.Get] always returns a complete one.
+]=]
 export type Palette = { [Group]: Color3 }
 
 -- The canonical ordered list of every group, so the deriver and validators can iterate.
@@ -37664,8 +38128,16 @@ local function validate(name: string, palette: Palette)
 	end
 end
 
--- Define (or redefine) a named theme from a partial palette. Returns the *resolved*
--- complete palette so callers can pass it straight to Set or inspect it.
+--[=[
+	@within Theme
+	@function Define
+	@param name string
+	@param palette Palette
+	@return Palette
+	Define (or redefine) a named theme from a partial palette. Returns the *resolved* complete
+	palette, so you can pass it straight to [Theme.Set] or inspect it. Redefining the active
+	theme recolours live.
+]=]
 function Theme.Define(name: string, palette: Palette): Palette
 	assert(type(name) == "string" and name ~= "", "Karet.Theme.Define: name must be a non-empty string")
 	validate(name, palette)
@@ -37679,8 +38151,14 @@ function Theme.Define(name: string, palette: Palette): Palette
 	return resolved
 end
 
--- Set the active theme by name or by an explicit (partial) palette. Switching fires
--- OnChanged so every subscribed surface recolors at once.
+--[=[
+	@within Theme
+	@function Set
+	@param theme string | Palette
+	Set the active theme by name or by an explicit (partial) palette. Switching fires
+	[Theme.OnChanged], so every subscribed surface recolours at once. Errors if a name isn't
+	defined.
+]=]
 function Theme.Set(theme: string | Palette)
 	if type(theme) == "string" then
 		local resolved = registry[theme]
@@ -37696,8 +38174,14 @@ function Theme.Set(theme: string | Palette)
 	emit()
 end
 
--- Read the active palette, or a single group's colour. Theme.Get() -> full palette;
--- Theme.Get("Error") -> Color3.
+--[=[
+	@within Theme
+	@function Get
+	@param group Group?
+	@return Palette | Color3
+	Read the active palette, or a single group's colour. `Theme.Get()` returns the full (always
+	complete) palette; `Theme.Get("Error")` returns that group's `Color3`.
+]=]
 function Theme.Get(group: Group?): any
 	if group == nil then
 		return active
@@ -37709,12 +38193,22 @@ function Theme.Get(group: Group?): any
 	return color
 end
 
--- The name of the active theme, or nil if a raw palette was Set directly.
+--[=[
+	@within Theme
+	@function Name
+	@return string?
+	The name of the active theme, or nil if a raw palette was [Theme.Set] directly.
+]=]
 function Theme.Name(): string?
 	return activeName
 end
 
--- Names of all defined themes.
+--[=[
+	@within Theme
+	@function List
+	@return {string}
+	Names of all defined themes.
+]=]
 function Theme.List(): { string }
 	local names = {}
 	for name in registry do
@@ -37724,13 +38218,25 @@ function Theme.List(): { string }
 	return names
 end
 
--- The canonical list of group names (a copy, so callers can't mutate the source).
+--[=[
+	@within Theme
+	@function Groups
+	@return {Group}
+	The canonical list of group names (a copy, so callers can't mutate the source).
+]=]
 function Theme.Groups(): { Group }
 	return table.clone(GROUPS)
 end
 
--- Subscribe to theme changes; the callback fires immediately with the current theme and
--- again on every Set/redefine. Returns an unsubscribe function.
+--[=[
+	@within Theme
+	@function OnChanged
+	@param fn (palette: Palette, name: string?) -> ()
+	@return () -> ()
+	Subscribe to theme changes. The callback fires immediately with the current theme and again
+	on every [Theme.Set] or redefine. Returns an unsubscribe function. This is how every Karet
+	surface recolours live.
+]=]
 function Theme.OnChanged(fn: (Palette, string?) -> ()): () -> ()
 	table.insert(listeners, fn)
 	fn(active, activeName)
@@ -37977,6 +38483,21 @@ local _35 = mod("Types", _1, [[
 
 local Types = {}
 Types.__index = Types
+
+-- The names of the built-in types, as a string-literal union. An Arg's `Type` field uses this so
+-- editors autocomplete and check "Player"/"Number"/... A custom type from Karet.DefineType won't be
+-- in this union (Luau can't extend it at runtime); declare those args with `Type = "MyType" :: any`.
+export type TypeName =
+	"String"
+	| "Number"
+	| "Integer"
+	| "Boolean"
+	| "Duration"
+	| "Player"
+	| "Players"
+	| "Team"
+	| "Color"
+	| "Vector3"
 
 export type Definition = {
 	Parse: (raw: any) -> (any, string?), -- (value, errorMessage)
