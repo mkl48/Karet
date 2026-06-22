@@ -23239,13 +23239,28 @@ function Pik.StartPlayerSession(plrOrId: Player | number, overrides: any): any
 			local ok, err = pcall(function()
 				local stores = {}
 				for name, schema in schemas do
-					local profile = schema.store:StartSessionAsync(`{name}_{userId}`, {
-						Cancel = function()
-							return player ~= nil and player.Parent == nil
-						end,
-					})
+					-- StartSessionAsync returns nil (or throws) when the key is contended or the
+					-- datastore request budget is full, which is common at join when other systems
+					-- are loading their own data. retry a few times with backoff before giving up.
+					local profile, lastErr
+					for attempt = 1, 4 do
+						local ok2, result = pcall(schema.store.StartSessionAsync, schema.store, `{name}_{userId}`, {
+							Cancel = function()
+								return player ~= nil and player.Parent == nil
+							end,
+						})
+						if ok2 and result then
+							profile = result
+							break
+						end
+						lastErr = if ok2 then "session unavailable (key contended or store throttled)" else result
+						if player and player.Parent == nil then
+							break -- they already left, stop trying
+						end
+						task.wait(attempt) -- 1s, 2s, 3s backoff
+					end
 					if not profile then
-						error(`could not start a session for schema '{name}' (key locked or store down)`)
+						error(`could not start a session for schema '{name}': {tostring(lastErr)}`)
 					end
 					profile:AddUserId(userId)
 					runMigration(profile)
