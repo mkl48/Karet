@@ -12,18 +12,43 @@
 local Registry = {}
 Registry.__index = Registry
 
-export type NetworkKind = "Shared" | "Client" | "Server" | "Context"
-export type Handler = (ctx: any, payload: any?) -> ()
+local Context = require(script.Parent.Context)
+local Types = require(script.Parent.Types)
 
-export type Arg = { Name: string, Types: { string }, Required: boolean?, Default: any? }
+export type NetworkKind = "Shared" | "Client" | "Server" | "Context"
+
+-- A typed command handler. TArgs is the command's arg record, so ctx.Args comes out fully typed
+-- (ctx.Args.target : Player) instead of any. Defaults to a loose map for untyped commands.
+export type Handler<TArgs = { [string]: any }> = (ctx: Context.Context<TArgs>, payload: any?) -> ()
+
+-- One positional argument. You write `Type` (a built-in type name, or a list of names tried in
+-- order, first that parses+validates wins). For a custom Karet.DefineType type, write
+-- `Type = "MyType" :: any`. `Types` is the engine-canonical array the normalizer fills in.
+export type Arg = {
+	Name: string,
+	Type: (Types.TypeName | { Types.TypeName })?,
+	Types: { string }?,
+	Required: boolean?,
+	Default: any?,
+	Description: string?,
+}
 -- boolean toggles: -s / -p (stackable shorts), declared per command
 export type Flag = { Name: string, Short: string?, Description: string? }
 -- valued long options: --delay=2 / --label=hi, optionally typed + defaulted
-export type Modifier = { Name: string, Types: { string }?, Default: any?, Description: string? }
+export type Modifier = {
+	Name: string,
+	Type: (Types.TypeName | { Types.TypeName })?,
+	Types: { string }?,
+	Default: any?,
+	Description: string?,
+}
 export type Return = { Name: string, Type: string }
 
-export type Definition = {
-	Name: string,
+-- A command definition. `Name` is supplied as the first arg to Karet.Command (or carried in the
+-- table for folder auto-load). Handlers are the top-level Server/Client/Shared fields; TArgs threads
+-- your arg record into each handler's ctx. `On` is the engine-canonical form the normalizer fills.
+export type Definition<TArgs = { [string]: any }> = {
+	Name: string?,
 	Aliases: { string }?,
 	Description: string?,
 	Network: NetworkKind?,
@@ -33,32 +58,47 @@ export type Definition = {
 	Flags: { Flag }?,
 	Modifiers: { Modifier }?,
 	Returns: { Return }?,
-	On: { Client: Handler?, Server: Handler?, Shared: Handler? }?,
-}
-
--- The fluent builder surface (so editors autocomplete the chain).
-export type Builder = {
-	Alias: (self: Builder, ...string) -> Builder,
-	Description: (self: Builder, text: string) -> Builder,
-	Network: (self: Builder, kind: NetworkKind) -> Builder,
-	Permission: (self: Builder, role: string) -> Builder,
-	Dangerous: (self: Builder, flag: boolean?) -> Builder,
-	Arg: (self: Builder, arg: Arg) -> Builder,
-	Flag: (self: Builder, flag: Flag) -> Builder,
-	Modifier: (self: Builder, modifier: Modifier) -> Builder,
-	Return: (self: Builder, ret: Return) -> Builder,
-	On: (self: Builder, realm: NetworkKind, handler: Handler) -> Builder,
-	Register: (self: Builder) -> Definition,
+	Server: Handler<TArgs>?,
+	Client: Handler<TArgs>?,
+	Shared: Handler<TArgs>?,
+	On: { Client: Handler<TArgs>?, Server: Handler<TArgs>?, Shared: Handler<TArgs>? }?,
 }
 
 local VALID_NETWORK = { Shared = true, Client = true, Server = true, Context = true }
+
+-- Fold the public def shape into the engine's canonical record, in place: top-level Server/Client/
+-- Shared handlers move under `On`, and each arg/modifier's `Type` becomes the `Types` array the
+-- evaluator coerces against. Already-canonical defs (On/Types set directly) pass through untouched.
+local function normalize(def: Definition)
+	local on = def.On or {}
+	if def.Server then
+		on.Server = def.Server
+	end
+	if def.Client then
+		on.Client = def.Client
+	end
+	if def.Shared then
+		on.Shared = def.Shared
+	end
+	def.On = on
+
+	local function fillTypes(specs: { any }?)
+		for _, spec in specs or {} do
+			if spec.Type ~= nil and spec.Types == nil then
+				spec.Types = (type(spec.Type) == "table" and spec.Type) or { spec.Type }
+			end
+		end
+	end
+	fillTypes(def.Args)
+	fillTypes(def.Modifiers)
+end
 
 --[=[
 	@class Registry
 
 	Holds the command definitions, keyed by name (case-insensitive) with alias resolution. One
-	registry is shared across both realms. You usually go through [Karet.Register] /
-	[Karet.Command] rather than touching this directly.
+	registry is shared across both realms. You usually go through [Karet.Command] rather than
+	touching this directly.
 ]=]
 function Registry.new()
 	return setmetatable({
@@ -68,14 +108,14 @@ function Registry.new()
 end
 
 local function validate(def: Definition)
-	assert(type(def.Name) == "string" and def.Name ~= "", "Karet.Register: a command needs a Name")
+	assert(type(def.Name) == "string" and def.Name ~= "", "Karet.Command: a command needs a Name")
 	local network = def.Network or "Shared"
-	assert(VALID_NETWORK[network], `Karet.Register('{def.Name}'): invalid Network '{network}'`)
-	assert(type(def.On) == "table", `Karet.Register('{def.Name}'): handlers must live under an On table`)
+	assert(VALID_NETWORK[network], `Karet.Command('{def.Name}'): invalid Network '{network}'`)
+	local on = def.On or {}
 	if network == "Context" then
-		assert(def.On.Client and def.On.Server, `'{def.Name}' is a Context command and needs both On.Client and On.Server`)
+		assert(on.Client and on.Server, `'{def.Name}' is a Context command and needs both a Client and a Server handler`)
 	else
-		assert(def.On[network] or def.On.Shared, `'{def.Name}' (Network '{network}') needs an On.{network} handler`)
+		assert(on[network] or on.Shared, `'{def.Name}' (Network '{network}') needs a {network} (or Shared) handler`)
 	end
 end
 
@@ -84,9 +124,12 @@ end
 	@method register
 	@param def Definition
 	@return Definition
-	Register a command from a table definition (validated). Returns the stored definition.
+	Register a command from a table definition. The def is normalized (top-level Server/Client/Shared
+	handlers folded into `On`, each arg's `Type` expanded into `Types`) then validated. Returns the
+	stored definition.
 ]=]
 function Registry:register(def: Definition): Definition
+	normalize(def)
 	validate(def)
 	local key = string.lower(def.Name)
 	self.commands[key] = def
@@ -94,6 +137,24 @@ function Registry:register(def: Definition): Definition
 		self.aliases[string.lower(alias)] = key
 	end
 	return def
+end
+
+-- Register a list of def tables, isolating failures so one bad command doesn't sink the batch
+-- (used by the folder auto-loader). Returns the names that registered and a list of the ones that
+-- threw, each as { name, error }.
+function Registry:registerMany(defs: { Definition }): ({ string }, { { name: string, error: string } })
+	local ok, errors = {}, {}
+	for _, def in defs do
+		local success, result = pcall(function()
+			return self:register(def)
+		end)
+		if success then
+			table.insert(ok, def.Name)
+		else
+			table.insert(errors, { name = tostring(type(def) == "table" and def.Name or def), error = tostring(result) })
+		end
+	end
+	return ok, errors
 end
 
 -- Drop a command (and any of its aliases) from the registry. used by the function/macro
@@ -147,77 +208,6 @@ function Registry:list(): { string }
 	end
 	table.sort(names)
 	return names
-end
-
--- ---------------------------------------------------------------------------
--- fluent builder - sugar that accumulates a Definition then :Register()s it
--- ---------------------------------------------------------------------------
-
-local Builder = {}
-Builder.__index = Builder
-
-function Registry:command(name: string): Builder
-	return setmetatable({
-		registry = self,
-		def = { Name = name, Aliases = {}, Args = {}, Flags = {}, Modifiers = {}, Returns = {}, On = {} } :: Definition,
-	}, Builder) :: any
-end
-
-function Builder:Alias(...: string)
-	for _, a in { ... } do
-		table.insert(self.def.Aliases, a)
-	end
-	return self
-end
-
-function Builder:Description(text: string)
-	self.def.Description = text
-	return self
-end
-
-function Builder:Network(kind: string)
-	self.def.Network = kind
-	return self
-end
-
-function Builder:Permission(role: string)
-	self.def.Permission = role
-	return self
-end
-
--- Mark the command dangerous so it asks for confirmation before running.
-function Builder:Dangerous(flag: boolean?)
-	self.def.Dangerous = flag ~= false
-	return self
-end
-
-function Builder:Arg(arg: Arg)
-	table.insert(self.def.Args, arg)
-	return self
-end
-
-function Builder:Flag(flag: Flag)
-	table.insert(self.def.Flags, flag)
-	return self
-end
-
-function Builder:Modifier(modifier: Modifier)
-	table.insert(self.def.Modifiers, modifier)
-	return self
-end
-
-function Builder:Return(ret: Return)
-	table.insert(self.def.Returns, ret)
-	return self
-end
-
-function Builder:On(realm: string, handler: (...any) -> ())
-	self.def.On[realm] = handler
-	return self
-end
-
-function Builder:Register(): Definition
-	return self.registry:register(self.def)
 end
 
 return Registry

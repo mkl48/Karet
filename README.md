@@ -93,14 +93,14 @@ lune run scripts/build-installer
 ```lua
 local Karet = require(game.ReplicatedStorage.Karet)
 
-Karet.Command("echo")
-    :Description("print your text back")
-    :Network("Client")
-    :Arg({ Name = "text", Types = { "String" }, Required = true })
-    :On("Client", function(ctx)
+Karet.Command("echo", {
+    Description = "print your text back",
+    Network = "Client",
+    Args = { { Name = "text", Type = "String", Required = true } },
+    Client = function(ctx)
         ctx.Print(ctx.Args.text)
-    end)
-    :Register()
+    end,
+})
 
 Karet.Start({
     Toggle = "Semicolon",            -- press ; to open/close the terminal
@@ -123,50 +123,46 @@ Karet.Start({ DefaultRole = "User" })
 
 ## Defining commands
 
-Two equivalent styles - the table is the canonical record, the builder is sugar.
+One form: `Karet.Command(name, def)`. Handlers are the top-level `Server` / `Client` / `Shared`
+fields. Declare an arg record and annotate the handler's `ctx` with `Karet.Context<...>` for typed,
+autocompleted `ctx.Args`.
 
 ```lua
--- Table style
-Karet.Register({
-    Name        = "ban",
-    Aliases     = { "b" },
-    Network     = "Context",   -- Shared | Client | Server | Context
-    Permission  = "Admin",
+type BanArgs = { target: Player, duration: number? }
+
+Karet.Command("ban", {
+    Aliases    = { "b" },
+    Network    = "Context",   -- Shared | Client | Server | Context
+    Permission = "Admin",
     Args = {
-        { Name = "target",   Types = { "Player" },   Required = true },
-        { Name = "duration", Types = { "Duration" }, Required = false, Default = 86400 },
+        { Name = "target",   Type = "Player",   Required = true },
+        { Name = "duration", Type = "Duration", Required = false, Default = 86400 },
     },
-    Attributes = {
+    Flags = {
         { Name = "permanent", Short = "p", Description = "permanent ban" },
     },
     Returns = {
         { Name = "target", Type = "Player" },
     },
-    On = {
-        Client = function(ctx)
-            ctx.Commit({ TargetId = ctx.Args.target.UserId,
-                         Duration = ctx.Attributes.permanent and -1 or ctx.Args.duration })
-        end,
-        Server = function(ctx, payload)
-            local target = game.Players:GetPlayerByUserId(payload.TargetId)
-            if target then target:Kick("banned") end
-            ctx.Reply(payload.TargetId .. " banned")
-        end,
-    },
+    -- the Context bridge: Client builds a payload, Server acts on it authoritatively
+    Client = function(ctx: Karet.Context<BanArgs>)
+        ctx.Commit({
+            TargetId = ctx.Args.target.UserId,
+            Duration = ctx.Flags.permanent and -1 or ctx.Args.duration,
+        })
+    end,
+    Server = function(ctx, payload)
+        local target = game.Players:GetPlayerByUserId(payload.TargetId)
+        if target then target:Kick("banned") end
+        ctx.Reply(payload.TargetId .. " banned")
+    end,
 })
 ```
 
+Or keep each command in its own ModuleScript and auto-load a folder of them:
+
 ```lua
--- Builder style
-Karet.Command("ban")
-    :Alias("b")
-    :Network("Context")
-    :Permission("Admin")
-    :Arg({ Name = "target", Types = { "Player" }, Required = true })
-    :Attribute({ Name = "permanent", Short = "p" })
-    :On("Client", function(ctx) ctx.Commit({ TargetId = ctx.Args.target.UserId }) end)
-    :On("Server", function(ctx, payload) --[[ ... ]] end)
-    :Register()
+Karet.Start({ Commands = game.ReplicatedStorage.Commands })
 ```
 
 ### Custom types
@@ -231,7 +227,7 @@ Karet.Theme.Set("mytheme")
 -- shell
 Karet.Tokenize(raw) ; Karet.Parse(raw) ; Karet.Analyze(source)
 -- commands & types
-Karet.Register(def) ; Karet.Command(name) ; Karet.DefineType(name, def)
+Karet.Command(name, def) ; Karet.DefineType(name, def)
 -- auth & middleware
 Karet.SetRoleHook / SetAuthHook / SetGroupHook / SetRoles / SetDefaultRole
 Karet.AllowPlayer / DenyPlayer

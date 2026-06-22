@@ -38,17 +38,16 @@ local function rig(register: (any) -> ())
 end
 
 local function greetCommand(r)
+	-- the common helper, in the new top-level-handler authoring form
 	r:register({
 		Name = "greet",
 		Network = "Shared",
-		Args = { { Name = "who", Types = { "String" }, Required = true } },
+		Args = { { Name = "who", Type = "String", Required = true } },
 		Returns = { { Name = "msg", Type = "String" } },
-		On = {
-			Shared = function(ctx)
-				ctx.Print("hi " .. ctx.Args.who)
-				ctx.Return("hi " .. ctx.Args.who)
-			end,
-		},
+		Shared = function(ctx)
+			ctx.Print("hi " .. ctx.Args.who)
+			ctx.Return("hi " .. ctx.Args.who)
+		end,
 	})
 end
 
@@ -68,7 +67,7 @@ return function(t)
 			r:register({
 				Name = "wait",
 				Network = "Shared",
-				Args = { { Name = "secs", Types = { "Number" }, Required = true } },
+				Args = { { Name = "secs", Type = "Number", Required = true } },
 				On = { Shared = function() ran = true end },
 			})
 		end)
@@ -110,7 +109,7 @@ return function(t)
 			r:register({
 				Name = "echo",
 				Network = "Shared",
-				Args = { { Name = "text", Types = { "String" }, Required = false, Default = "default" } },
+				Args = { { Name = "text", Type = "String", Required = false, Default = "default" } },
 				On = { Shared = function(ctx) ctx.Print(ctx.Args.text) end },
 			})
 		end)
@@ -181,7 +180,7 @@ return function(t)
 			r:register({
 				Name = "echo",
 				Network = "Shared",
-				Args = { { Name = "text", Types = { "String" }, Required = true } },
+				Args = { { Name = "text", Type = "String", Required = true } },
 				On = { Shared = function(ctx)
 					ctx.Print(ctx.Args.text)
 					ctx.Return(ctx.Args.text)
@@ -190,7 +189,7 @@ return function(t)
 			r:register({
 				Name = "shout",
 				Network = "Shared",
-				Args = { { Name = "text", Types = { "String" }, Required = true } },
+				Args = { { Name = "text", Type = "String", Required = true } },
 				On = { Shared = function(ctx)
 					ctx.Print(string.upper(ctx.Args.text))
 					ctx.Return(string.upper(ctx.Args.text))
@@ -225,7 +224,7 @@ return function(t)
 			r:register({
 				Name = "spin",
 				Network = "Shared",
-				Modifiers = { { Name = "delay", Types = { "Number" }, Default = 5 } },
+				Modifiers = { { Name = "delay", Type = "Number", Default = 5 } },
 				On = { Shared = function(ctx)
 					seen = ctx.Modifiers.delay
 				end },

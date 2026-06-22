@@ -83,10 +83,9 @@ function Commands.build(services: Services): { any }
 			Aliases = { "h", "?" },
 			Description = "list commands, or show one command's details",
 			Network = "Client",
-			Args = { { Name = "command", Types = { "String" }, Required = false } },
-			On = {
-				Client = function(ctx)
-					local rich = ctx.UI.available == true
+			Args = { { Name = "command", Type = "String", Required = false } },
+			Client = function(ctx)
+				local rich = ctx.UI.available == true
 					local which = ctx.Args.command
 					if which then
 						local def = services.get(which)
@@ -139,8 +138,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print("commands: " .. table.concat(services.list(), ", "))
 						ctx.Info("type  help <command>  for details")
 					end
-				end,
-			},
+			end,
 		},
 
 		{
@@ -148,7 +146,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "cmds" },
 			Description = "list every registered command",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if ctx.UI.available == true then
 					local rows = {}
 					for _, name in services.list() do
@@ -159,7 +157,7 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Print(table.concat(services.list(), ", "))
 				end
-			end },
+			end,
 		},
 
 		{
@@ -167,9 +165,9 @@ function Commands.build(services: Services): { any }
 			Aliases = { "cls" },
 			Description = "clear the terminal output",
 			Network = "Client",
-			On = { Client = function()
+			Client = function()
 				services.clear()
-			end },
+			end,
 		},
 
 		{
@@ -177,11 +175,11 @@ function Commands.build(services: Services): { any }
 			Aliases = { "print" },
 			Description = "print text back",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				ctx.Print(ctx.Args.text)
 				ctx.Return(ctx.Args.text)
-			end },
+			end,
 		},
 
 		{
@@ -189,18 +187,18 @@ function Commands.build(services: Services): { any }
 			Aliases = { "ver" },
 			Description = "show the Karet version",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print(`Karet v{services.version}`)
-			end },
+			end,
 		},
 
 		{
 			Name = "time",
 			Description = "show the current time",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print(os.date("%H:%M:%S"))
-			end },
+			end,
 		},
 
 		{
@@ -208,41 +206,41 @@ function Commands.build(services: Services): { any }
 			Aliases = { "whoami" },
 			Description = "show your name",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print(services.playerName())
-			end },
+			end,
 		},
 
 		{
 			Name = "ping",
 			Description = "pong",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print("pong")
 				ctx.Return("pong")
-			end },
+			end,
 		},
 
 		{
 			Name = "theme",
 			Description = "switch the active colour theme",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				local ok, err = pcall(services.setTheme, ctx.Args.name)
 				if ok then
 					ctx.Print(`theme set to {ctx.Args.name}`)
 				else
 					ctx.Err(tostring(err))
 				end
-			end },
+			end,
 		},
 
 		{
 			Name = "themes",
 			Description = "list the available themes",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local names = services.listThemes()
 				if ctx.UI.available == true then
 					local rows = {}
@@ -253,7 +251,7 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Print(table.concat(names, ", "))
 				end
-			end },
+			end,
 		},
 
 		{
@@ -261,12 +259,12 @@ function Commands.build(services: Services): { any }
 			Aliases = { "kav" },
 			Description = "open the script editor",
 			Network = "Client",
-			Args = { { Name = "file", Types = { "String" }, Required = false } },
+			Args = { { Name = "file", Type = "String", Required = false } },
 			Flags = {
 				{ Name = "server", Short = "s", Description = "edit in server context" },
 				{ Name = "client", Short = "c", Description = "edit in client context" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local editor = services.editor and services.editor()
 				if not editor then
 					ctx.Err("kaveat isnt on, start with Kaveat = true")
@@ -293,7 +291,7 @@ function Commands.build(services: Services): { any }
 				else
 					editor:open()
 				end
-			end },
+			end,
 		},
 
 		-- ----- config -----
@@ -303,7 +301,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "cfg", "settings" },
 			Description = "open the @CONFIG editor (theme, placement, prompt...)",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not (services.editor and services.editor()) then
 					return ctx.Err("config needs Kaveat - start with Karet.Start{ Kaveat = true }")
 				end
@@ -312,7 +310,7 @@ function Commands.build(services: Services): { any }
 				end
 				ctx.Info("opening @CONFIG in kaveat (edit values, then :w to apply)")
 				services.openConfig()
-			end },
+			end,
 		},
 
 		{
@@ -320,7 +318,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "consts" },
 			Description = "show karet's default constants (fonts, sizes, timings...)",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local d = services.defaults
 				if not d then
 					return ctx.Err("defaults unavailable")
@@ -353,7 +351,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{r[1]} = {r[2]}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- extension platform -----
@@ -362,7 +360,7 @@ function Commands.build(services: Services): { any }
 			Name = "panels",
 			Description = "list registered panels (open one with: open <name>)",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.panels then
 					return ctx.Err("panels unavailable")
 				end
@@ -381,15 +379,15 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{p.Name}  {p.Description or ""}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		{
 			Name = "open",
 			Description = "open a registered panel: open theme",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.panels then
 					return ctx.Err("panels unavailable")
 				end
@@ -401,7 +399,7 @@ function Commands.build(services: Services): { any }
 				if not ok then
 					ctx.Err(`panel '{ctx.Args.name}' errored: {tostring(err)}`)
 				end
-			end },
+			end,
 		},
 
 		{
@@ -409,7 +407,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "ext" },
 			Description = "list installed extensions",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.extensions then
 					return ctx.Err("extensions unavailable")
 				end
@@ -428,7 +426,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{e.Name}  {e.Description or ""}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- aliases -----
@@ -438,37 +436,37 @@ function Commands.build(services: Services): { any }
 			Description = "make a command alias: alias ll commands  (then run: ll)",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "command", Types = { "String" }, Required = true },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "command", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.aliases then
 					return ctx.Err("aliases unavailable")
 				end
 				services.aliases.set(ctx.Args.name, ctx.Args.command)
 				ctx.Success(`{ctx.Args.name} -> {ctx.Args.command}`)
-			end },
+			end,
 		},
 
 		{
 			Name = "unalias",
 			Description = "remove a command alias",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.aliases then
 					return ctx.Err("aliases unavailable")
 				end
 				services.aliases.unset(ctx.Args.name)
 				ctx.Info(`removed alias {ctx.Args.name}`)
-			end },
+			end,
 		},
 
 		{
 			Name = "aliases",
 			Description = "list command aliases",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.aliases then
 					return ctx.Err("aliases unavailable")
 				end
@@ -487,7 +485,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{n} -> {services.aliases.get(n)}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- functions / macros -----
@@ -498,10 +496,10 @@ function Commands.build(services: Services): { any }
 			Description = 'name a sequence of commands: function hi "echo hello; echo there"  (then run: hi)',
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "body", Types = { "String" }, Required = true },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "body", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.functions then
 					return ctx.Err("functions unavailable")
 				end
@@ -512,7 +510,7 @@ function Commands.build(services: Services): { any }
 				end
 				services.functions.set(name, ctx.Args.body)
 				ctx.Success(`{name}() defined`)
-			end },
+			end,
 		},
 
 		{
@@ -520,8 +518,8 @@ function Commands.build(services: Services): { any }
 			Aliases = { "delfn", "undef" },
 			Description = "remove a function",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.functions then
 					return ctx.Err("functions unavailable")
 				end
@@ -530,7 +528,7 @@ function Commands.build(services: Services): { any }
 				end
 				services.functions.unset(ctx.Args.name)
 				ctx.Info(`removed function {ctx.Args.name}`)
-			end },
+			end,
 		},
 
 		{
@@ -538,7 +536,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "fns" },
 			Description = "list defined functions and their bodies",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.functions then
 					return ctx.Err("functions unavailable")
 				end
@@ -557,7 +555,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{n}() = {services.functions.get(n)}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- environment variables (@name) -----
@@ -567,24 +565,24 @@ function Commands.build(services: Services): { any }
 			Description = "set a shell variable: set name value  (read it back as @name)",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "value", Types = { "String" }, Required = true },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "value", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.env then
 					return ctx.Err("env vars unavailable")
 				end
 				services.env.set(ctx.Args.name, coerceValue(ctx.Args.value))
 				ctx.Success(`@{ctx.Args.name} = {ctx.Args.value}`)
-			end },
+			end,
 		},
 
 		{
 			Name = "get",
 			Description = "read a shell variable",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.env then
 					return ctx.Err("env vars unavailable")
 				end
@@ -595,21 +593,21 @@ function Commands.build(services: Services): { any }
 					ctx.Print(`@{ctx.Args.name} = {tostring(v)}`)
 					ctx.Return(v)
 				end
-			end },
+			end,
 		},
 
 		{
 			Name = "unset",
 			Description = "remove a shell variable",
 			Network = "Client",
-			Args = { { Name = "name", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "name", Type = "String", Required = true } },
+			Client = function(ctx)
 				if not services.env then
 					return ctx.Err("env vars unavailable")
 				end
 				services.env.unset(ctx.Args.name)
 				ctx.Info(`unset @{ctx.Args.name}`)
-			end },
+			end,
 		},
 
 		{
@@ -617,7 +615,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "env" },
 			Description = "list shell variables and their values",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if not services.env then
 					return ctx.Err("env vars unavailable")
 				end
@@ -636,7 +634,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{r[1]} = {r[2]}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		-- ----- info / system -----
@@ -646,7 +644,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "hist" },
 			Description = "show recent command history",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local hist = services.history and services.history() or {}
 				local n = #hist
 				if n == 0 then
@@ -664,7 +662,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{i}  {hist[i]}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		{
@@ -672,7 +670,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "fetch", "about" },
 			Description = "system info card, karet style",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local specs = {
 					{ "user", services.playerName() },
 					{ "shell", "karet " .. services.version },
@@ -696,7 +694,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{kv[1]}: {kv[2]}`)
 					end
 				end
-			end },
+			end,
 		},
 
 		{
@@ -704,7 +702,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "who" },
 			Description = "list players in the server",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local plrs = game:GetService("Players"):GetPlayers()
 				if #plrs == 0 then
 					return ctx.Info("no players")
@@ -723,7 +721,7 @@ function Commands.build(services: Services): { any }
 					ctx.Print(table.concat(names, ", "))
 				end
 				ctx.Return(#plrs)
-			end },
+			end,
 		},
 
 		{
@@ -731,7 +729,7 @@ function Commands.build(services: Services): { any }
 			Aliases = { "position", "where" },
 			Description = "your character's position",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local plr = services.player and services.player()
 				local char = plr and plr.Character
 				local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -741,17 +739,17 @@ function Commands.build(services: Services): { any }
 				local p = root.Position
 				ctx.Print(string.format("%.1f, %.1f, %.1f", p.X, p.Y, p.Z))
 				ctx.Return(p)
-			end },
+			end,
 		},
 
 		{
 			Name = "uptime",
 			Description = "how long this server has been running",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local s = math.floor(time())
 				ctx.Print(string.format("%dh %dm %ds", s // 3600, (s % 3600) // 60, s % 60))
-			end },
+			end,
 		},
 
 		{
@@ -759,9 +757,9 @@ function Commands.build(services: Services): { any }
 			Aliases = { "day" },
 			Description = "current date",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				ctx.Print(os.date("%Y-%m-%d %A"))
-			end },
+			end,
 		},
 
 		-- ----- utility -----
@@ -771,13 +769,13 @@ function Commands.build(services: Services): { any }
 			Aliases = { "sleep" },
 			Description = "pause for a duration (30s, 1m, ...)",
 			Network = "Client",
-			Args = { { Name = "duration", Types = { "Duration" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "duration", Type = "Duration", Required = true } },
+			Client = function(ctx)
 				local secs = ctx.Args.duration
 				local spin = ctx.Indicator({ type = "spinner", label = `waiting {secs}s` })
 				task.wait(secs)
 				spin:Succeed(`waited {secs}s`)
-			end },
+			end,
 		},
 
 		{
@@ -786,10 +784,10 @@ function Commands.build(services: Services): { any }
 			Description = "a random number: random / random max / random min max",
 			Network = "Client",
 			Args = {
-				{ Name = "a", Types = { "Number" }, Required = false },
-				{ Name = "b", Types = { "Number" }, Required = false },
+				{ Name = "a", Type = "Number", Required = false },
+				{ Name = "b", Type = "Number", Required = false },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local a, b = ctx.Args.a, ctx.Args.b
 				local n
 				if a and b then
@@ -801,19 +799,19 @@ function Commands.build(services: Services): { any }
 				end
 				ctx.Print(tostring(n))
 				ctx.Return(n)
-			end },
+			end,
 		},
 
 		{
 			Name = "roll",
 			Description = "roll a die (default d6)",
 			Network = "Client",
-			Args = { { Name = "sides", Types = { "Integer" }, Required = false, Default = 6 } },
-			On = { Client = function(ctx)
+			Args = { { Name = "sides", Type = "Integer", Required = false, Default = 6 } },
+			Client = function(ctx)
 				local n = math.random(1, math.max(2, ctx.Args.sides))
 				ctx.Print(`rolled {n}`)
 				ctx.Return(n)
-			end },
+			end,
 		},
 
 		{
@@ -821,35 +819,35 @@ function Commands.build(services: Services): { any }
 			Aliases = { "coin" },
 			Description = "flip a coin",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local r = math.random() < 0.5 and "heads" or "tails"
 				ctx.Print(r)
 				ctx.Return(r)
-			end },
+			end,
 		},
 
 		{
 			Name = "upper",
 			Description = "UPPERCASE a string",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				local s = string.upper(ctx.Args.text)
 				ctx.Print(s)
 				ctx.Return(s)
-			end },
+			end,
 		},
 
 		{
 			Name = "lower",
 			Description = "lowercase a string",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				local s = string.lower(ctx.Args.text)
 				ctx.Print(s)
 				ctx.Return(s)
-			end },
+			end,
 		},
 
 		{
@@ -857,12 +855,12 @@ function Commands.build(services: Services): { any }
 			Aliases = { "length" },
 			Description = "length of a string",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				local n = utf8.len(ctx.Args.text) or #ctx.Args.text
 				ctx.Print(tostring(n))
 				ctx.Return(n)
-			end },
+			end,
 		},
 
 		{
@@ -870,12 +868,12 @@ function Commands.build(services: Services): { any }
 			Aliases = { "rev" },
 			Description = "reverse a string",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				local s = string.reverse(ctx.Args.text)
 				ctx.Print(s)
 				ctx.Return(s)
-			end },
+			end,
 		},
 
 		{
@@ -884,26 +882,26 @@ function Commands.build(services: Services): { any }
 			Description = "repeat a string n times",
 			Network = "Client",
 			Args = {
-				{ Name = "text", Types = { "String" }, Required = true },
-				{ Name = "times", Types = { "Integer" }, Required = false, Default = 2 },
+				{ Name = "text", Type = "String", Required = true },
+				{ Name = "times", Type = "Integer", Required = false, Default = 2 },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local s = string.rep(ctx.Args.text, math.clamp(ctx.Args.times, 1, 100))
 				ctx.Print(s)
 				ctx.Return(s)
-			end },
+			end,
 		},
 
 		{
 			Name = "count",
 			Description = "count matched players (count all / count me / ...)",
 			Network = "Client",
-			Args = { { Name = "players", Types = { "Players" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "players", Type = "Players", Required = true } },
+			Client = function(ctx)
 				local n = #ctx.Args.players
 				ctx.Print(tostring(n))
 				ctx.Return(n)
-			end },
+			end,
 		},
 
 		{
@@ -911,27 +909,27 @@ function Commands.build(services: Services): { any }
 			Aliases = { "say" },
 			Description = "echo a highlighted message",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				ctx.Success(ctx.Args.text)
-			end },
+			end,
 		},
 
 		{
 			Name = "toast",
 			Description = "pop a transient toast notification: toast \"saved\" --group=Success",
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
+			Args = { { Name = "text", Type = "String", Required = true } },
 			Modifiers = {
-				{ Name = "group", Types = { "String" }, Default = "Output", Description = "theme group (Success/Warn/Error/Info)" },
-				{ Name = "title", Types = { "String" }, Default = "karet", Description = "the toast's title line" },
+				{ Name = "group", Type = "String", Default = "Output", Description = "theme group (Success/Warn/Error/Info)" },
+				{ Name = "title", Type = "String", Default = "karet", Description = "the toast's title line" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				if ctx.UI.available ~= true then
 					return ctx.Info(ctx.Args.text)
 				end
 				ctx.UI.Toast(ctx.Args.text, { group = ctx.Modifiers.group, title = ctx.Modifiers.title })
-			end },
+			end,
 		},
 	}
 
@@ -955,10 +953,10 @@ function Commands.build(services: Services): { any }
 			Name = name,
 			Description = desc,
 			Network = "Client",
-			Args = { { Name = "n", Types = { "Number" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "n", Type = "Number", Required = true } },
+			Client = function(ctx)
 				emit(ctx, fn(ctx.Args.n))
-			end },
+			end,
 		})
 	end
 
@@ -969,12 +967,12 @@ function Commands.build(services: Services): { any }
 			Description = desc,
 			Network = "Client",
 			Args = {
-				{ Name = "a", Types = { "Number" }, Required = true },
-				{ Name = "b", Types = { "Number" }, Required = true },
+				{ Name = "a", Type = "Number", Required = true },
+				{ Name = "b", Type = "Number", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				emit(ctx, fn(ctx.Args.a, ctx.Args.b))
-			end },
+			end,
 		})
 	end
 
@@ -984,10 +982,10 @@ function Commands.build(services: Services): { any }
 			Name = name,
 			Description = desc,
 			Network = "Client",
-			Args = { { Name = "text", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "text", Type = "String", Required = true } },
+			Client = function(ctx)
 				emit(ctx, fn(ctx.Args.text))
-			end },
+			end,
 		})
 	end
 
@@ -998,18 +996,18 @@ function Commands.build(services: Services): { any }
 			Description = desc,
 			Network = "Client",
 			Args = {
-				{ Name = "a", Types = { "String" }, Required = true },
-				{ Name = "b", Types = { "String" }, Required = true },
+				{ Name = "a", Type = "String", Required = true },
+				{ Name = "b", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				emit(ctx, fn(ctx.Args.a, ctx.Args.b))
-			end },
+			end,
 		})
 	end
 
 	-- no args
 	local function plain(name: string, desc: string, fn: (any) -> ())
-		add({ Name = name, Description = desc, Network = "Client", On = { Client = fn } })
+		add({ Name = name, Description = desc, Network = "Client", Client = fn })
 	end
 
 	-- math (one number) --------------------------------------------------------
@@ -1217,13 +1215,13 @@ function Commands.build(services: Services): { any }
 			Description = "run a command N times: repc jump 200  (pace it with --delay=0.5)",
 			Network = "Client",
 			Args = {
-				{ Name = "command", Types = { "String" }, Required = true },
-				{ Name = "times", Types = { "Integer" }, Required = true },
+				{ Name = "command", Type = "String", Required = true },
+				{ Name = "times", Type = "Integer", Required = true },
 			},
 			Modifiers = {
-				{ Name = "delay", Types = { "Number" }, Default = 0, Description = "seconds between runs" },
+				{ Name = "delay", Type = "Number", Default = 0, Description = "seconds between runs" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local line = ctx.Args.command
 				local maxTimes = (services.defaults and services.defaults.Repeat.MaxTimes) or 10000
 				local times = math.clamp(ctx.Args.times, 1, maxTimes)
@@ -1246,7 +1244,7 @@ function Commands.build(services: Services): { any }
 					ind:Succeed(`{line}: ran {times}x`)
 				end
 				ctx.Return(times - fails)
-			end },
+			end,
 		})
 	end
 
@@ -1259,10 +1257,10 @@ function Commands.build(services: Services): { any }
 			Description = "run a command on a loop: every 5s jump  (stop it with: stop <id>)",
 			Network = "Client",
 			Args = {
-				{ Name = "interval", Types = { "Duration" }, Required = true },
-				{ Name = "command", Types = { "String" }, Required = true },
+				{ Name = "interval", Type = "Duration", Required = true },
+				{ Name = "command", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local interval = math.max(0.1, ctx.Args.interval)
 				local line = ctx.Args.command
 				local running = true
@@ -1281,7 +1279,7 @@ function Commands.build(services: Services): { any }
 				end)
 				ctx.Success(`job {id} started: every {interval}s {line}`)
 				ctx.Return(id)
-			end },
+			end,
 		})
 		add({
 			Name = "watch",
@@ -1289,16 +1287,16 @@ function Commands.build(services: Services): { any }
 			Description = 'run a command when an expressions value changes: watch health "notify ouch"',
 			Network = "Client",
 			Args = {
-				{ Name = "expr", Types = { "String" }, Required = true },
-				{ Name = "command", Types = { "String" }, Required = true },
+				{ Name = "expr", Type = "String", Required = true },
+				{ Name = "command", Type = "String", Required = true },
 			},
 			Modifiers = {
-				{ Name = "interval", Types = { "Number" }, Default = 0.5, Description = "seconds between polls" },
+				{ Name = "interval", Type = "Number", Default = 0.5, Description = "seconds between polls" },
 			},
 			Flags = {
 				{ Name = "immediate", Short = "i", Description = "also run once right away" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local interval = math.max(0.1, ctx.Modifiers.interval or 0.5)
 				local expr = ctx.Args.expr
 				local line = ctx.Args.command
@@ -1337,13 +1335,13 @@ function Commands.build(services: Services): { any }
 				end)
 				ctx.Success(`job {id} watching {expr}`)
 				ctx.Return(id)
-			end },
+			end,
 		})
 		add({
 			Name = "jobs",
 			Description = "list running background jobs",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local list = jobs.list()
 				if #list == 0 then
 					return ctx.Info("no running jobs")
@@ -1365,15 +1363,15 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`{j.id}  {j.label}`)
 					end
 				end
-			end },
+			end,
 		})
 		add({
 			Name = "stop",
 			Aliases = { "kill" },
 			Description = "stop a job by id, or `stop all`",
 			Network = "Client",
-			Args = { { Name = "id", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "id", Type = "String", Required = true } },
+			Client = function(ctx)
 				if string.lower(ctx.Args.id) == "all" then
 					jobs.stopAll()
 					return ctx.Success("stopped all jobs")
@@ -1384,7 +1382,7 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Warn(`no job {ctx.Args.id}`)
 				end
-			end },
+			end,
 		})
 	end
 
@@ -1397,25 +1395,25 @@ function Commands.build(services: Services): { any }
 			Description = 'pin a value to the on-screen HUD: pin health  /  pin (@hp) hp --interval=1',
 			Network = "Client",
 			Args = {
-				{ Name = "expr", Types = { "String" }, Required = true },
-				{ Name = "label", Types = { "String" }, Required = false },
+				{ Name = "expr", Type = "String", Required = true },
+				{ Name = "label", Type = "String", Required = false },
 			},
 			Modifiers = {
-				{ Name = "interval", Types = { "Number" }, Default = 0.5, Description = "seconds between samples" },
+				{ Name = "interval", Type = "Number", Default = 0.5, Description = "seconds between samples" },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local id = hud.add(ctx.Args.expr, ctx.Args.label, ctx.Modifiers.interval)
 				ctx.Success(`pinned #{id}: {ctx.Args.label or ctx.Args.expr}`)
 				ctx.Return(id)
-			end },
+			end,
 		})
 		add({
 			Name = "unpin",
 			Aliases = { "unhud" },
 			Description = "remove a HUD watch by id, or `unpin all`",
 			Network = "Client",
-			Args = { { Name = "id", Types = { "String" }, Required = true } },
-			On = { Client = function(ctx)
+			Args = { { Name = "id", Type = "String", Required = true } },
+			Client = function(ctx)
 				if string.lower(ctx.Args.id) == "all" then
 					hud.clear()
 					return ctx.Success("cleared the HUD")
@@ -1426,14 +1424,14 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Warn(`no HUD watch {ctx.Args.id}`)
 				end
-			end },
+			end,
 		})
 		add({
 			Name = "pins",
 			Aliases = { "huds" },
 			Description = "list the pinned HUD watches",
 			Network = "Client",
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local list = hud.list()
 				if #list == 0 then
 					return ctx.Info("nothing pinned (try: pin health)")
@@ -1448,7 +1446,7 @@ function Commands.build(services: Services): { any }
 						ctx.Print(`#{w.id}  {w.label}  ({w.expr})`)
 					end
 				end
-			end },
+			end,
 		})
 	end
 
@@ -1460,8 +1458,8 @@ function Commands.build(services: Services): { any }
 			Aliases = { "console" },
 			Description = "mirror the game's print/warn/error into the terminal: logs on|off",
 			Network = "Client",
-			Args = { { Name = "mode", Types = { "String" }, Required = false } },
-			On = { Client = function(ctx)
+			Args = { { Name = "mode", Type = "String", Required = false } },
+			Client = function(ctx)
 				local mode = ctx.Args.mode and string.lower(ctx.Args.mode) or (lc.isOn() and "off" or "on")
 				if mode == "on" then
 					lc.on()
@@ -1472,7 +1470,7 @@ function Commands.build(services: Services): { any }
 				else
 					ctx.Warn("usage: logs on | off")
 				end
-			end },
+			end,
 		})
 	end
 
@@ -1485,16 +1483,16 @@ function Commands.build(services: Services): { any }
 			Description = "increment a numeric variable",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "by", Types = { "Number" }, Required = false, Default = 1 },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "by", Type = "Number", Required = false, Default = 1 },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local v = tonumber(env.get(ctx.Args.name)) or 0
 				v += ctx.Args.by
 				env.set(ctx.Args.name, v)
 				ctx.Success(`@{ctx.Args.name} = {v}`)
 				ctx.Return(v)
-			end },
+			end,
 		})
 		add({
 			Name = "decr",
@@ -1502,30 +1500,30 @@ function Commands.build(services: Services): { any }
 			Description = "decrement a numeric variable",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "by", Types = { "Number" }, Required = false, Default = 1 },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "by", Type = "Number", Required = false, Default = 1 },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local v = tonumber(env.get(ctx.Args.name)) or 0
 				v -= ctx.Args.by
 				env.set(ctx.Args.name, v)
 				ctx.Success(`@{ctx.Args.name} = {v}`)
 				ctx.Return(v)
-			end },
+			end,
 		})
 		add({
 			Name = "append",
 			Description = "append text to a variable",
 			Network = "Client",
 			Args = {
-				{ Name = "name", Types = { "String" }, Required = true },
-				{ Name = "text", Types = { "String" }, Required = true },
+				{ Name = "name", Type = "String", Required = true },
+				{ Name = "text", Type = "String", Required = true },
 			},
-			On = { Client = function(ctx)
+			Client = function(ctx)
 				local v = tostring(env.get(ctx.Args.name) or "") .. ctx.Args.text
 				env.set(ctx.Args.name, v)
 				ctx.Success(`@{ctx.Args.name} = {v}`)
-			end },
+			end,
 		})
 	end
 
@@ -1544,23 +1542,23 @@ function Commands.build(services: Services): { any }
 		Aliases = { "ws", "speed" },
 		Description = "set your walk speed",
 		Network = "Client",
-		Args = { { Name = "speed", Types = { "Number" }, Required = true } },
-		On = { Client = function(ctx)
+		Args = { { Name = "speed", Type = "Number", Required = true } },
+		Client = function(ctx)
 			local char = withChar(ctx)
 			local hum = char and char:FindFirstChildOfClass("Humanoid")
 			if hum then
 				hum.WalkSpeed = ctx.Args.speed
 				ctx.Success(`walkspeed = {ctx.Args.speed}`)
 			end
-		end },
+		end,
 	})
 	add({
 		Name = "jumppower",
 		Aliases = { "jp" },
 		Description = "set your jump power",
 		Network = "Client",
-		Args = { { Name = "power", Types = { "Number" }, Required = true } },
-		On = { Client = function(ctx)
+		Args = { { Name = "power", Type = "Number", Required = true } },
+		Client = function(ctx)
 			local char = withChar(ctx)
 			local hum = char and char:FindFirstChildOfClass("Humanoid")
 			if hum then
@@ -1568,7 +1566,7 @@ function Commands.build(services: Services): { any }
 				hum.JumpPower = ctx.Args.power
 				ctx.Success(`jumppower = {ctx.Args.power}`)
 			end
-		end },
+		end,
 	})
 	plain("jump", "make your character jump", function(ctx)
 		local char = withChar(ctx)
@@ -1598,7 +1596,7 @@ function Commands.build(services: Services): { any }
 		Aliases = { "panel" },
 		Description = "open a control-panel window (walkspeed / jump / respawn)",
 		Network = "Client",
-		On = { Client = function(ctx)
+		Client = function(ctx)
 			local plr = services.player and services.player()
 			local w = ctx.Window({ title = "controls" })
 			w:Label("character")
@@ -1623,7 +1621,7 @@ function Commands.build(services: Services): { any }
 				w:Close()
 			end)
 			ctx.Info("opened the controls window")
-		end },
+		end,
 	})
 
 	return defs

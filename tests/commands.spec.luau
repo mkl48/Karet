@@ -49,12 +49,12 @@ local function rig(ui)
 					Name = name,
 					Description = `function: {body}`,
 					Network = "Client",
-					On = { Client = function(ctx)
+					Client = function(ctx)
 						local out = ev:run(Parser.parse(fnStore[name]).ast)
 						if type(out) == "table" and out.ok == false and out.error then
 							ctx.Abort(out.error)
 						end
-					end },
+					end,
 				})
 			end,
 			unset = function(name)

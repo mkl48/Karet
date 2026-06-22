@@ -40,13 +40,15 @@ local ThemeEditor = require(script.Theme.Editor)
 export type ThemePalette = Theme.Palette
 export type ThemeGroup = Theme.Group
 export type Argument = Registry.Arg
-export type Attribute = Registry.Attribute
 export type ReturnSpec = Registry.Return
 export type NetworkKind = Registry.NetworkKind
-export type Handler = Registry.Handler
-export type CommandDefinition = Registry.Definition
-export type CommandBuilder = Registry.Builder
-export type Context = ContextMod.Context
+export type Handler<TArgs = { [string]: any }> = Registry.Handler<TArgs>
+export type CommandDefinition<TArgs = { [string]: any }> = Registry.Definition<TArgs>
+-- the ctx handed to every handler. parameterise it with your arg record for typed args:
+-- `Server = function(ctx: Karet.Context<{ target: Player }>) ... end`
+export type Context<TArgs = { [string]: any }> = ContextMod.Context<TArgs>
+-- a built-in argument type name ("Player" / "Number" / ...), for Arg.Type
+export type TypeName = Types.TypeName
 export type TypeDefinition = Types.Definition
 export type RateLimit = { MaxCalls: number, Window: number }
 export type ToggleSpec = string | { Key: string, Modifier: string? }
@@ -67,6 +69,7 @@ export type ToggleSpec = string | { Key: string, Modifier: string? }
 	.Persist boolean? -- save / load the profile via Pik DataStores
 	.Admin boolean? -- enable the moderation suite (kick / ban / mute / audit + dashboard)
 	.BuiltIns boolean? -- register built-in commands (default true)
+	.Commands (Instance | { Instance } | { CommandDefinition<any> })? -- auto-load command modules: a Folder (required recursively), a list of ModuleScripts, or ready-made defs
 	.DefaultRole string? -- server: default role for players
 	.RateLimit RateLimit? -- server: rate limiting (reserved)
 	.KaveatExec (boolean | (player: Player) -> boolean)? -- server: allow kaveat to run code
@@ -88,6 +91,7 @@ export type StartConfig = {
 	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores
 	Admin: boolean?, -- enable the moderation suite (kick/ban/mute/audit + dashboard)
 	BuiltIns: boolean?, -- register built-in commands (default true)
+	Commands: (Instance | { Instance } | { CommandDefinition<any> })?, -- auto-load command modules (Folder, list of ModuleScripts, or ready-made defs)
 	DefaultRole: string?, -- server: default role for players
 	RateLimit: RateLimit?, -- server: rate limiting (reserved)
 	KaveatExec: (boolean | (player: Player) -> boolean)?, -- server: allow kaveat to run code (studio always allowed)
@@ -104,7 +108,7 @@ export type StartConfig = {
 	```
 
 	`Karet` is the product, the terminal surface, and the shell grammar that runs inside it.
-	Register your own commands with [Karet.Register], gate them with the permission hooks, and
+	Register your own commands with [Karet.Command], gate them with the permission hooks, and
 	hook the lifecycle with the middleware hooks. The shell, theme engine, editor and rich
 	output toolkit hang off this table too ([Karet.Shell], [Karet.Theme], ...).
 ]=]
@@ -364,27 +368,36 @@ Karet.Config = {}
 
 --[=[
 	@within Karet
-	@function Register
-	@tag Commands
-	@param def CommandDefinition
-	@return CommandDefinition
-	Register a command from a table definition. See [the commands guide](/docs/commands) for the
-	full shape (Args, Flags, Modifiers, On, Network, Permission).
-]=]
-function Karet.Register(def: CommandDefinition): CommandDefinition
-	return registry:register(def)
-end
-
---[=[
-	@within Karet
 	@function Command
 	@tag Commands
 	@param name string
-	@return CommandBuilder
-	Start the fluent builder: `Karet.Command("ban"):Alias("b"):Network("Server"):On(...):Register()`.
+	@param def CommandDefinition
+	@return CommandDefinition
+	Define and register a command. The one way to add a command:
+
+	```lua
+	type BanArgs = { target: Player, reason: string? }
+
+	Karet.Command("ban", {
+	    Network = "Server",
+	    Permission = "Admin",
+	    Args = {
+	        { Name = "target", Type = "Player" },
+	        { Name = "reason", Type = "String", Required = false },
+	    },
+	    Server = function(ctx: Karet.Context<BanArgs>)
+	        -- ctx.Args.target is typed as Player, ctx.Args.reason as string?
+	    end,
+	})
+	```
+
+	Declare the arg record (`BanArgs` here) and annotate the handler's `ctx` with
+	`Karet.Context<...>` to get fully typed, autocompleted `ctx.Args`. See
+	[the commands guide](/docs/commands) for the full shape.
 ]=]
-function Karet.Command(name: string): CommandBuilder
-	return registry:command(name)
+function Karet.Command<TArgs>(name: string, def: CommandDefinition<TArgs>): CommandDefinition<TArgs>
+	def.Name = name
+	return registry:register(def)
 end
 
 --[=[
@@ -1379,8 +1392,62 @@ end
 	Karet.Start({ Toggle = "Semicolon", Theme = "tokyonight", Kaveat = true })
 	```
 ]=]
+-- Auto-load commands from Start{ Commands = ... }. Accepts a Folder (require every descendant
+-- ModuleScript), a list of ModuleScripts, or a list of ready-made def tables. A command module is
+-- expected to call Karet.Command(...) at scope, so simply requiring it registers the command; a
+-- plain def table (carrying Name) is registered directly. One bad module/def warns and doesn't
+-- abort the rest. Called from Start on each realm, so Server-network commands register everywhere.
+local function loadCommands(source: any)
+	if source == nil then
+		return
+	end
+
+	local function requireModule(module: Instance)
+		local ok, err = pcall(require, module :: any)
+		if not ok then
+			warn(`karet: failed to load command module '{module:GetFullName()}' - {tostring(err)}`)
+		end
+	end
+
+	-- a Roblox container: require every ModuleScript in it (or itself, if it is one)
+	if typeof(source) == "Instance" then
+		if source:IsA("ModuleScript") then
+			requireModule(source)
+		else
+			for _, descendant in source:GetDescendants() do
+				if descendant:IsA("ModuleScript") then
+					requireModule(descendant)
+				end
+			end
+		end
+		return
+	end
+
+	-- a list: each entry is a ModuleScript to require or a ready-made def to register
+	if type(source) == "table" then
+		local defs = {}
+		for _, entry in source do
+			if typeof(entry) == "Instance" then
+				if entry:IsA("ModuleScript") then
+					requireModule(entry)
+				end
+			elseif type(entry) == "table" then
+				table.insert(defs, entry)
+			end
+		end
+		if #defs > 0 then
+			local _, errors = registry:registerMany(defs)
+			for _, fail in errors do
+				warn(`karet: failed to register command '{fail.name}' - {fail.error}`)
+			end
+		end
+	end
+end
+
 function Karet.Start(opts: StartConfig?): Terminal.Terminal?
 	local options: StartConfig = opts or {}
+	-- register user command modules on both realms before booting the realm-specific surface
+	loadCommands(options.Commands)
 	if RunService:IsClient() then
 		return startClient(options)
 	end

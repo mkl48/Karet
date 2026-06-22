@@ -14,16 +14,16 @@ local function rig()
 	r:register({
 		Name = "ban",
 		Network = "Shared",
-		Args = { { Name = "dur", Types = { "Duration" }, Required = true } },
+		Args = { { Name = "dur", Type = "Duration", Required = true } },
 		Flags = { { Name = "silent", Short = "s" }, { Name = "permanent", Short = "p" } },
-		On = { Shared = noop },
+		Shared = noop,
 	})
-	r:register({ Name = "bandage", Network = "Shared", On = { Shared = noop } })
+	r:register({ Name = "bandage", Network = "Shared", Shared = noop })
 	r:register({
 		Name = "kick",
 		Network = "Shared",
-		Args = { { Name = "confirm", Types = { "Boolean" } } },
-		On = { Shared = noop },
+		Args = { { Name = "confirm", Type = "Boolean" } },
+		Shared = noop,
 	})
 	return Complete.build(r, Types.new())
 end
@@ -94,7 +94,7 @@ return function(t)
 	-- @ intellisense: env vars + @TYPE[...]
 	local function envRig()
 		local r = Registry.new()
-		r:register({ Name = "echo", Network = "Shared", Args = { { Name = "x", Types = { "String" } } }, On = { Shared = noop } })
+		r:register({ Name = "echo", Network = "Shared", Args = { { Name = "x", Type = "String" } }, Shared = noop })
 		return Complete.build(r, Types.new(), function()
 			return { "greeting", "gold", "hp" }
 		end)

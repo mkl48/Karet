@@ -93,11 +93,13 @@ export type Control = {
 }
 
 -- The handler-facing ctx surface (typed so editors autocomplete ctx.* in your handlers).
-export type Context = {
+-- TArgs is the per-command arg record you declare (e.g. { target: Player, reason: string? }), so
+-- ctx.Args.target comes out fully typed. Defaults to a loose map for commands with no arg type.
+export type Context<TArgs = { [string]: any }> = {
 	Player: Player?,
 	Command: string,
 	RawInput: string?,
-	Args: { [string]: any },
+	Args: TArgs,
 	Flags: { [string]: boolean }, -- boolean toggles: -s / -p
 	Modifiers: { [string]: any }, -- valued long options: --name=value
 	Input: any, -- piped input from the previous command (a | b), or nil

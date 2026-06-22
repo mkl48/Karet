@@ -10,6 +10,21 @@
 local Types = {}
 Types.__index = Types
 
+-- The names of the built-in types, as a string-literal union. An Arg's `Type` field uses this so
+-- editors autocomplete and check "Player"/"Number"/... A custom type from Karet.DefineType won't be
+-- in this union (Luau can't extend it at runtime); declare those args with `Type = "MyType" :: any`.
+export type TypeName =
+	"String"
+	| "Number"
+	| "Integer"
+	| "Boolean"
+	| "Duration"
+	| "Player"
+	| "Players"
+	| "Team"
+	| "Color"
+	| "Vector3"
+
 export type Definition = {
 	Parse: (raw: any) -> (any, string?), -- (value, errorMessage)
 	Validate: ((value: any) -> (boolean | string))?, -- true | error message
