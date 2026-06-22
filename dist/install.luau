@@ -98,7 +98,7 @@ export type ToggleSpec = string | { Key: string, Modifier: string? }
 	.Position UDim2? -- override the window position
 	.Kaveat boolean? -- enable the Kaveat editor
 	.PromptType ("text" | "window")? -- how Dangerous commands confirm: terminal y/N or an Iris modal
-	.Persist boolean? -- save / load the profile via Pik DataStores
+	.Persist boolean? -- autosave/load the profile via Pik DataStores. on by default; pass false to disable
 	.Admin boolean? -- enable the moderation suite (kick / ban / mute / audit + dashboard)
 	.BuiltIns boolean? -- register built-in commands (default true)
 	.Commands (Instance | { Instance } | { CommandDefinition<any> })? -- auto-load command modules: a Folder (required recursively), a list of ModuleScripts, or ready-made defs
@@ -120,7 +120,7 @@ export type StartConfig = {
 	Position: UDim2?, -- override the window position
 	Kaveat: boolean?, -- enable the Kaveat editor
 	PromptType: ("text" | "window")?, -- how Dangerous commands confirm: terminal y/N or an Iris modal
-	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores
+	Persist: boolean?, -- autosave/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores. defaults on; false disables
 	Admin: boolean?, -- enable the moderation suite (kick/ban/mute/audit + dashboard)
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	Commands: (Instance | { Instance } | { CommandDefinition<any> })?, -- auto-load command modules (Folder, list of ModuleScripts, or ready-made defs)
@@ -1134,7 +1134,7 @@ local function startClient(options: StartConfig)
 	-- profile persistence (client side). load the saved shell state on join, then push saves
 	-- on an interval. fields are filled IN PLACE so existing references (input.history bound to
 	-- Profile.History, the evaluator's @env scope, the kav store) keep pointing at live data.
-	if options.Persist then
+	if options.Persist ~= false then
 		local function fillArray(dst, src)
 			if type(src) == "table" then
 				table.clear(dst)
@@ -1263,7 +1263,7 @@ local function startServer(options: StartConfig)
 	-- profile persistence (server side). Pik is required lazily so the DataStore-touching
 	-- ProfileStore never loads unless persistence is actually on. one KaretProfile schema
 	-- holds the saved shell state; the client loads it on join and pushes saves periodically.
-	if options.Persist then
+	if options.Persist ~= false then
 		local ok, Pik = pcall(require, script.Pik)
 		if ok and Pik then
 			Pik.Configure({ AutoSave = true, AutoSaveInterval = 120, Reconcile = true, LogLevel = "Warn" })
@@ -1275,13 +1275,20 @@ local function startServer(options: StartConfig)
 				Aliases = {},
 				Functions = {},
 			})
-			Players.PlayerAdded:Connect(function(player)
+			-- persistence is on by default now, so in studio with API access off this would warn on
+			-- every join. say it once and stay quiet (almost always "studio access to apis is off").
+			local warnedSession = false
+			local function startSession(player: Player)
 				Pik.StartPlayerSession(player).catch(function(err)
-					warn(`karet: profile session failed for {player.Name} - {tostring(err)}`)
+					if not warnedSession then
+						warnedSession = true
+						warn(`karet: profile autosave unavailable - {tostring(err)} (pass Persist = false to Start to silence)`)
+					end
 				end)
-			end)
+			end
+			Players.PlayerAdded:Connect(startSession)
 			for _, player in Players:GetPlayers() do
-				Pik.StartPlayerSession(player)
+				startSession(player)
 			end
 			-- the saved fields the client is allowed to read/write
 			local FIELDS = { "History", "Vars", "Kavs", "Theme", "Aliases", "Functions" }
@@ -36529,6 +36536,137 @@ end
 
 return Terminal
 ]])
+mod("Highlight", _33, [[
+-- splits a shell command line into coloured spans for the input overlay. pure + headless
+-- testable: returns a list of { text, group } where group is a Theme group name ("Plain" for
+-- whitespace / anything we dont colour). the caller maps groups to palette colours. runs the
+-- real shell lexer so the highlighting matches how the line actually parses.
+
+local Lexer = require(script.Parent.Parent.Shell.Lexer)
+local Token = require(script.Parent.Parent.Shell.Token)
+
+local Highlight = {}
+
+local K = Token.Kind
+
+-- token kinds that map straight to a group no matter where they sit
+local DIRECT: { [string]: string } = {
+	[K.Number] = "Number",
+	[K.String] = "String",
+	[K.Boolean] = "Boolean",
+	[K.At] = "Variable",
+	[K.Slash] = "Reference",
+	[K.SlashSlash] = "Reference",
+	[K.Hash] = "Reference",
+	[K.Assign] = "Operator",
+	[K.Bang] = "Operator",
+	[K.Tilde] = "Operator",
+	[K.EqEq] = "Operator",
+	[K.BangEq] = "Operator",
+	[K.Gte] = "Operator",
+	[K.Lte] = "Operator",
+	[K.Gt] = "Operator",
+	[K.Lt] = "Operator",
+	[K.Plus] = "Operator",
+	[K.Star] = "Operator",
+	[K.Percent] = "Operator",
+	[K.AmpAmp] = "Operator",
+	[K.PipePipe] = "Operator",
+	[K.Amp] = "Operator",
+	[K.Pipe] = "Operator",
+	[K.Semicolon] = "Operator",
+	[K.LParen] = "Punctuation",
+	[K.RParen] = "Punctuation",
+	[K.LBrace] = "Punctuation",
+	[K.RBrace] = "Punctuation",
+	[K.LBracket] = "Punctuation",
+	[K.RBracket] = "Punctuation",
+	[K.Dot] = "Punctuation",
+}
+
+-- operators that end a command segment, so the next ident is a fresh command word
+local SEGMENT_BREAK: { [string]: boolean } = {
+	[K.AmpAmp] = true,
+	[K.PipePipe] = true,
+	[K.Pipe] = true,
+	[K.Amp] = true,
+	[K.Semicolon] = true,
+	[K.Newline] = true,
+}
+
+export type Span = { text: string, group: string }
+
+-- a dash hugging the next ident (no space between) is a flag (-s, --dry-run), otherwise its
+-- arithmetic minus. lets us colour the whole flag including its leading dash.
+local function dashIsFlag(tokens, idx): boolean
+	local nextTok = tokens[idx + 1]
+	return nextTok ~= nil and nextTok.kind == K.Ident and not nextTok.spaceBefore
+end
+
+--[=[
+	Classify `text` into coloured spans. `isCommand(word)` (optional) decides whether the leading
+	word of each segment is a known command (coloured Command) or not (Error), giving the live
+	"this command exists" feedback as you type.
+]=]
+function Highlight.spans(text: string, isCommand: ((string) -> boolean)?): { Span }
+	local ok, result = pcall(Lexer.tokenize, text)
+	if not ok or type(result) ~= "table" or not result.tokens then
+		return { { text = text, group = "Plain" } }
+	end
+
+	local spans: { Span } = {}
+	local tokens = result.tokens
+	local cursor = 1 -- byte offset we've emitted up to
+	local expectCommand = true -- the next ident is a command word
+	local flagNext = false -- previous dash hugs this ident, colour it Flag
+
+	for idx, tok in tokens do
+		if tok.kind == K.EOF then
+			break
+		end
+		-- whatever sits between the last token and this one is whitespace: emit it plain
+		if tok.pos > cursor then
+			table.insert(spans, { text = string.sub(text, cursor, tok.pos - 1), group = "Plain" })
+		end
+
+		local group: string
+		if tok.kind == K.Minus or tok.kind == K.MinusMinus then
+			if dashIsFlag(tokens, idx) then
+				group = "Flag"
+				flagNext = true
+			else
+				group = "Operator"
+			end
+		elseif tok.kind == K.Ident then
+			if flagNext then
+				group = "Flag"
+				flagNext = false
+			elseif expectCommand then
+				group = (isCommand and isCommand(tok.text)) and "Command" or "Error"
+				expectCommand = false
+			else
+				group = "Plain" -- a positional argument
+			end
+		else
+			group = DIRECT[tok.kind] or "Plain"
+			if SEGMENT_BREAK[tok.kind] then
+				expectCommand = true
+			end
+		end
+
+		table.insert(spans, { text = tok.text, group = group })
+		cursor = tok.pos + #tok.text
+	end
+
+	-- trailing whitespace the lexer dropped
+	if cursor <= #text then
+		table.insert(spans, { text = string.sub(text, cursor), group = "Plain" })
+	end
+	return spans
+end
+
+return Highlight
+]])
 mod("Hud", _33, [[
 -- the live HUD: a pinned, always-on overlay of watched expressions. each row shows a label,
 -- the current value, and a little sparkline of its recent history. lives on the ScreenGui so
@@ -36685,6 +36823,7 @@ local UserInputService = game:GetService("UserInputService")
 local create = require(script.Parent.create)
 local Defaults = require(script.Parent.Parent.Defaults)
 local Search = require(script.Parent.Search)
+local Highlight = require(script.Parent.Highlight)
 
 local Input = {}
 Input.__index = Input
@@ -36951,41 +37090,55 @@ end
 
 -- command colouring --------------------------------------------------------
 
--- colour the leading word of each chain segment if its a real command
+-- map a Highlight group name to a colour off the active palette, falling back to Foreground
+function Input:groupColor(group: string): string
+	local p = self.palette
+	if not p then
+		return "rgb(220,220,220)"
+	end
+	local c = (group ~= "Plain" and p[group]) or p.Foreground
+	return rgb(c)
+end
+
+-- full syntax colouring: run the shell lexer over the line and tint every token (command word,
+-- args, strings, numbers, flags, operators, @vars, /refs). an unknown leading word shows up in
+-- the Error colour, so you can see a command is wrong before you even hit enter.
 function Input:markup(text: string): string
-	local cmdColor = self.palette and rgb(self.palette.Command) or "rgb(180,200,255)"
 	local isCommand = self.completer and self.completer.isCommand
-	local result = {}
-	local pos, len, segStart = 1, #text, 1
-
-	local function flush(seg: string)
-		local lead, word, rest = string.match(seg, "^(%s*)(%S*)(.*)$")
-		if word and word ~= "" and isCommand and isCommand(word) then
-			table.insert(result, esc(lead) .. `<font color="{cmdColor}">` .. esc(word) .. `</font>` .. esc(rest))
+	local spans = Highlight.spans(text, isCommand)
+	local out = {}
+	for _, span in spans do
+		if span.group == "Plain" then
+			table.insert(out, esc(span.text))
 		else
-			table.insert(result, esc(seg))
+			table.insert(out, `<font color="{self:groupColor(span.group)}">{esc(span.text)}</font>`)
 		end
 	end
+	return table.concat(out)
+end
 
-	while pos <= len do
-		local op
-		for _, o in { "&&", "||", "|", "&", ";" } do
-			if string.sub(text, pos, pos + #o - 1) == o then
-				op = o
-				break
-			end
-		end
-		if op then
-			flush(string.sub(text, segStart, pos - 1))
-			table.insert(result, esc(op))
-			pos += #op
-			segStart = pos
-		else
-			pos += 1
-		end
+-- the faded inline completion drawn after the caret (cmdr-style ghost text). only when the caret
+-- sits at the very end and the top suggestion extends the word youre typing.
+function Input:ghostMarkup(): string
+	local sug = self.suggestions[self.sugIndex]
+	if not sug or type(sug.insert) ~= "string" then
+		return ""
 	end
-	flush(string.sub(text, segStart))
-	return table.concat(result)
+	local text = self.box.Text
+	if self.box.CursorPosition ~= #text + 1 then
+		return "" -- only trail the caret when it's at the end of the line
+	end
+	local trailing = string.match(text, "%S*$") or ""
+	if trailing == "" then
+		return ""
+	end
+	if #sug.insert <= #trailing or string.lower(string.sub(sug.insert, 1, #trailing)) ~= string.lower(trailing) then
+		return "" -- the suggestion doesn't continue what's typed
+	end
+	local remainder = string.sub(sug.insert, #trailing + 1)
+	local ghost = self.palette and self.palette.Ghost or (self.palette and self.palette.Muted)
+	local color = ghost and rgb(ghost) or "rgb(110,110,120)"
+	return `<font color="{color}">{esc(remainder)}</font>`
 end
 
 -- on a single typed char, drop in the closing half or type over an existing closer
@@ -37018,7 +37171,7 @@ function Input:updateOverlay()
 		local muted = self.palette and rgb(self.palette.Muted) or "rgb(120,120,120)"
 		self.overlay.Text = `<font color="{muted}">type a command</font>`
 	else
-		self.overlay.Text = self:markup(self.box.Text)
+		self.overlay.Text = self:markup(self.box.Text) .. self:ghostMarkup()
 	end
 end
 
@@ -37038,6 +37191,10 @@ function Input:refreshDropdown()
 	end
 	self.sugIndex = #self.suggestions > 0 and 1 or 0
 	self:renderDropdown()
+	-- suggestions just changed, so the ghost trailing the caret may have too
+	if self.box.Text ~= "" and not self.mode then
+		self.overlay.Text = self:markup(self.box.Text) .. self:ghostMarkup()
+	end
 end
 
 function Input:renderDropdown()
@@ -39230,5 +39387,5 @@ end
 return deps
 ]])
 
-print("[Karet] installed 112 modules under ReplicatedStorage.Karet")
+print("[Karet] installed 113 modules under ReplicatedStorage.Karet")
 return true

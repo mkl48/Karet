@@ -66,7 +66,7 @@ export type ToggleSpec = string | { Key: string, Modifier: string? }
 	.Position UDim2? -- override the window position
 	.Kaveat boolean? -- enable the Kaveat editor
 	.PromptType ("text" | "window")? -- how Dangerous commands confirm: terminal y/N or an Iris modal
-	.Persist boolean? -- save / load the profile via Pik DataStores
+	.Persist boolean? -- autosave/load the profile via Pik DataStores. on by default; pass false to disable
 	.Admin boolean? -- enable the moderation suite (kick / ban / mute / audit + dashboard)
 	.BuiltIns boolean? -- register built-in commands (default true)
 	.Commands (Instance | { Instance } | { CommandDefinition<any> })? -- auto-load command modules: a Folder (required recursively), a list of ModuleScripts, or ready-made defs
@@ -88,7 +88,7 @@ export type StartConfig = {
 	Position: UDim2?, -- override the window position
 	Kaveat: boolean?, -- enable the Kaveat editor
 	PromptType: ("text" | "window")?, -- how Dangerous commands confirm: terminal y/N or an Iris modal
-	Persist: boolean?, -- save/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores
+	Persist: boolean?, -- autosave/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores. defaults on; false disables
 	Admin: boolean?, -- enable the moderation suite (kick/ban/mute/audit + dashboard)
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	Commands: (Instance | { Instance } | { CommandDefinition<any> })?, -- auto-load command modules (Folder, list of ModuleScripts, or ready-made defs)
@@ -1102,7 +1102,7 @@ local function startClient(options: StartConfig)
 	-- profile persistence (client side). load the saved shell state on join, then push saves
 	-- on an interval. fields are filled IN PLACE so existing references (input.history bound to
 	-- Profile.History, the evaluator's @env scope, the kav store) keep pointing at live data.
-	if options.Persist then
+	if options.Persist ~= false then
 		local function fillArray(dst, src)
 			if type(src) == "table" then
 				table.clear(dst)
@@ -1231,7 +1231,7 @@ local function startServer(options: StartConfig)
 	-- profile persistence (server side). Pik is required lazily so the DataStore-touching
 	-- ProfileStore never loads unless persistence is actually on. one KaretProfile schema
 	-- holds the saved shell state; the client loads it on join and pushes saves periodically.
-	if options.Persist then
+	if options.Persist ~= false then
 		local ok, Pik = pcall(require, script.Pik)
 		if ok and Pik then
 			Pik.Configure({ AutoSave = true, AutoSaveInterval = 120, Reconcile = true, LogLevel = "Warn" })
@@ -1243,13 +1243,20 @@ local function startServer(options: StartConfig)
 				Aliases = {},
 				Functions = {},
 			})
-			Players.PlayerAdded:Connect(function(player)
+			-- persistence is on by default now, so in studio with API access off this would warn on
+			-- every join. say it once and stay quiet (almost always "studio access to apis is off").
+			local warnedSession = false
+			local function startSession(player: Player)
 				Pik.StartPlayerSession(player).catch(function(err)
-					warn(`karet: profile session failed for {player.Name} - {tostring(err)}`)
+					if not warnedSession then
+						warnedSession = true
+						warn(`karet: profile autosave unavailable - {tostring(err)} (pass Persist = false to Start to silence)`)
+					end
 				end)
-			end)
+			end
+			Players.PlayerAdded:Connect(startSession)
 			for _, player in Players:GetPlayers() do
-				Pik.StartPlayerSession(player)
+				startSession(player)
 			end
 			-- the saved fields the client is allowed to read/write
 			local FIELDS = { "History", "Vars", "Kavs", "Theme", "Aliases", "Functions" }

@@ -11,6 +11,7 @@ local UserInputService = game:GetService("UserInputService")
 local create = require(script.Parent.create)
 local Defaults = require(script.Parent.Parent.Defaults)
 local Search = require(script.Parent.Search)
+local Highlight = require(script.Parent.Highlight)
 
 local Input = {}
 Input.__index = Input
@@ -277,41 +278,55 @@ end
 
 -- command colouring --------------------------------------------------------
 
--- colour the leading word of each chain segment if its a real command
+-- map a Highlight group name to a colour off the active palette, falling back to Foreground
+function Input:groupColor(group: string): string
+	local p = self.palette
+	if not p then
+		return "rgb(220,220,220)"
+	end
+	local c = (group ~= "Plain" and p[group]) or p.Foreground
+	return rgb(c)
+end
+
+-- full syntax colouring: run the shell lexer over the line and tint every token (command word,
+-- args, strings, numbers, flags, operators, @vars, /refs). an unknown leading word shows up in
+-- the Error colour, so you can see a command is wrong before you even hit enter.
 function Input:markup(text: string): string
-	local cmdColor = self.palette and rgb(self.palette.Command) or "rgb(180,200,255)"
 	local isCommand = self.completer and self.completer.isCommand
-	local result = {}
-	local pos, len, segStart = 1, #text, 1
-
-	local function flush(seg: string)
-		local lead, word, rest = string.match(seg, "^(%s*)(%S*)(.*)$")
-		if word and word ~= "" and isCommand and isCommand(word) then
-			table.insert(result, esc(lead) .. `<font color="{cmdColor}">` .. esc(word) .. `</font>` .. esc(rest))
+	local spans = Highlight.spans(text, isCommand)
+	local out = {}
+	for _, span in spans do
+		if span.group == "Plain" then
+			table.insert(out, esc(span.text))
 		else
-			table.insert(result, esc(seg))
+			table.insert(out, `<font color="{self:groupColor(span.group)}">{esc(span.text)}</font>`)
 		end
 	end
+	return table.concat(out)
+end
 
-	while pos <= len do
-		local op
-		for _, o in { "&&", "||", "|", "&", ";" } do
-			if string.sub(text, pos, pos + #o - 1) == o then
-				op = o
-				break
-			end
-		end
-		if op then
-			flush(string.sub(text, segStart, pos - 1))
-			table.insert(result, esc(op))
-			pos += #op
-			segStart = pos
-		else
-			pos += 1
-		end
+-- the faded inline completion drawn after the caret (cmdr-style ghost text). only when the caret
+-- sits at the very end and the top suggestion extends the word youre typing.
+function Input:ghostMarkup(): string
+	local sug = self.suggestions[self.sugIndex]
+	if not sug or type(sug.insert) ~= "string" then
+		return ""
 	end
-	flush(string.sub(text, segStart))
-	return table.concat(result)
+	local text = self.box.Text
+	if self.box.CursorPosition ~= #text + 1 then
+		return "" -- only trail the caret when it's at the end of the line
+	end
+	local trailing = string.match(text, "%S*$") or ""
+	if trailing == "" then
+		return ""
+	end
+	if #sug.insert <= #trailing or string.lower(string.sub(sug.insert, 1, #trailing)) ~= string.lower(trailing) then
+		return "" -- the suggestion doesn't continue what's typed
+	end
+	local remainder = string.sub(sug.insert, #trailing + 1)
+	local ghost = self.palette and self.palette.Ghost or (self.palette and self.palette.Muted)
+	local color = ghost and rgb(ghost) or "rgb(110,110,120)"
+	return `<font color="{color}">{esc(remainder)}</font>`
 end
 
 -- on a single typed char, drop in the closing half or type over an existing closer
@@ -344,7 +359,7 @@ function Input:updateOverlay()
 		local muted = self.palette and rgb(self.palette.Muted) or "rgb(120,120,120)"
 		self.overlay.Text = `<font color="{muted}">type a command</font>`
 	else
-		self.overlay.Text = self:markup(self.box.Text)
+		self.overlay.Text = self:markup(self.box.Text) .. self:ghostMarkup()
 	end
 end
 
@@ -364,6 +379,10 @@ function Input:refreshDropdown()
 	end
 	self.sugIndex = #self.suggestions > 0 and 1 or 0
 	self:renderDropdown()
+	-- suggestions just changed, so the ghost trailing the caret may have too
+	if self.box.Text ~= "" and not self.mode then
+		self.overlay.Text = self:markup(self.box.Text) .. self:ghostMarkup()
+	end
 end
 
 function Input:renderDropdown()

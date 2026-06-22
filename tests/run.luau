@@ -23,6 +23,7 @@ local specs = {
 	{ name = "KavModules", spec = require("./kavmodules.spec") },
 	{ name = "Extensions", spec = require("./extensions.spec") },
 	{ name = "Autoload", spec = require("./autoload.spec") },
+	{ name = "Highlight", spec = require("./highlight.spec") },
 }
 
 local t = Harness.new()
