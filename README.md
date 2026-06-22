@@ -1,4 +1,6 @@
 <div align="center">
+  
+<img width="200" height="200" alt="KaretLogoRB" src="https://github.com/user-attachments/assets/8998cede-1b7d-4906-a4e5-beceeb719507" />
 
 # Karet
 
