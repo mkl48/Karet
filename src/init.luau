@@ -66,7 +66,7 @@ export type ToggleSpec = string | { Key: string, Modifier: string? }
 	.Position UDim2? -- override the window position
 	.Kaveat boolean? -- enable the Kaveat editor
 	.PromptType ("text" | "window")? -- how Dangerous commands confirm: terminal y/N or an Iris modal
-	.Persist boolean? -- autosave/load the profile via Pik DataStores. on by default; pass false to disable
+	.Persist boolean? -- opt-in: autosave/load the profile via Pik DataStores (off unless set; skip it if your game already persists)
 	.Admin boolean? -- enable the moderation suite (kick / ban / mute / audit + dashboard)
 	.BuiltIns boolean? -- register built-in commands (default true)
 	.Commands (Instance | { Instance } | { CommandDefinition<any> })? -- auto-load command modules: a Folder (required recursively), a list of ModuleScripts, or ready-made defs
@@ -88,7 +88,7 @@ export type StartConfig = {
 	Position: UDim2?, -- override the window position
 	Kaveat: boolean?, -- enable the Kaveat editor
 	PromptType: ("text" | "window")?, -- how Dangerous commands confirm: terminal y/N or an Iris modal
-	Persist: boolean?, -- autosave/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores. defaults on; false disables
+	Persist: boolean?, -- opt-in: autosave/load the profile (history/vars/kavs/theme/aliases/functions) via Pik DataStores (off unless set)
 	Admin: boolean?, -- enable the moderation suite (kick/ban/mute/audit + dashboard)
 	BuiltIns: boolean?, -- register built-in commands (default true)
 	Commands: (Instance | { Instance } | { CommandDefinition<any> })?, -- auto-load command modules (Folder, list of ModuleScripts, or ready-made defs)
@@ -1102,7 +1102,7 @@ local function startClient(options: StartConfig)
 	-- profile persistence (client side). load the saved shell state on join, then push saves
 	-- on an interval. fields are filled IN PLACE so existing references (input.history bound to
 	-- Profile.History, the evaluator's @env scope, the kav store) keep pointing at live data.
-	if options.Persist ~= false then
+	if options.Persist then
 		local function fillArray(dst, src)
 			if type(src) == "table" then
 				table.clear(dst)
@@ -1231,7 +1231,9 @@ local function startServer(options: StartConfig)
 	-- profile persistence (server side). Pik is required lazily so the DataStore-touching
 	-- ProfileStore never loads unless persistence is actually on. one KaretProfile schema
 	-- holds the saved shell state; the client loads it on join and pushes saves periodically.
-	if options.Persist ~= false then
+	-- opt-in: persistence stands up a ProfileStore. games that already run their own data layer
+	-- should leave this off so karet isn't competing for the datastore request budget at join.
+	if options.Persist then
 		local ok, Pik = pcall(require, script.Pik)
 		if ok and Pik then
 			Pik.Configure({ AutoSave = true, AutoSaveInterval = 120, Reconcile = true, LogLevel = "Warn" })
@@ -1243,14 +1245,24 @@ local function startServer(options: StartConfig)
 				Aliases = {},
 				Functions = {},
 			})
-			-- persistence is on by default now, so in studio with API access off this would warn on
-			-- every join. say it once and stay quiet (almost always "studio access to apis is off").
+			-- the reject reason is often a structured table, so spell it out instead of printing
+			-- "table: 0x...". warn once so a persistent failure doesn't spam on every join.
+			local function describe(err: any): string
+				if type(err) ~= "table" then
+					return tostring(err)
+				end
+				local parts = {}
+				for k, v in err do
+					table.insert(parts, `{tostring(k)}={tostring(v)}`)
+				end
+				return "{ " .. table.concat(parts, ", ") .. " }"
+			end
 			local warnedSession = false
 			local function startSession(player: Player)
 				Pik.StartPlayerSession(player).catch(function(err)
 					if not warnedSession then
 						warnedSession = true
-						warn(`karet: profile autosave unavailable - {tostring(err)} (pass Persist = false to Start to silence)`)
+						warn(`karet: profile persistence failed - {describe(err)} (often datastore api off, or the request budget is full at join)`)
 					end
 				end)
 			end
